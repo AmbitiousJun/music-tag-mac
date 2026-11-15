@@ -12,7 +12,7 @@ APP="$BUILD/MusicTag.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$ROOT/dist"
 SDK="$(xcrun --sdk macosx --show-sdk-path)"
 for ARCH in "${ARCHS[@]}"; do
-    echo "Building MusicTag for $ARCH…"
+    echo "Building MusicTag for ${ARCH}..."
     xcrun swiftc -Osize -whole-module-optimization -swift-version 5 \
         -sdk "$SDK" -target "$ARCH-apple-macosx13.0" \
         -module-cache-path "$BUILD/cache" \
