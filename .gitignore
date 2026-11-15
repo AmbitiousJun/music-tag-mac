@@ -1,0 +1,26 @@
+# macOS metadata
+.DS_Store
+._*
+.AppleDouble
+.LSOverride
+
+# Build output and generated test artifacts
+/dist/
+/build/
+/.build/
+/analysis
+
+# Xcode local state and build cache
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+
+# Swift Package Manager local configuration
+.swiftpm/
+
+# Editor temporary files
+*.swp
+*.swo
+*~

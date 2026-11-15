@@ -1,0 +1,76 @@
+name: Build and release macOS app
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build universal DMG and upload to Release
+    runs-on: macos-15
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set application version from tag
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          if [[ -z "$VERSION" || "$VERSION" == */* ]]; then
+            echo '::error::Use a version tag such as v1.2.3 without slashes.'
+            exit 1
+          fi
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" Resources/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GITHUB_RUN_NUMBER" Resources/Info.plist
+
+      - name: Build arm64 and x86_64 universal application
+        run: |
+          set -euo pipefail
+          bash scripts/build.sh --universal
+          xcrun lipo dist/MusicTag.app/Contents/MacOS/MusicTag -verify_arch arm64 x86_64
+          codesign --verify --strict --verbose=2 dist/MusicTag.app
+
+      - name: Package versioned DMG
+        run: |
+          set -euo pipefail
+          STAGING_DIR="$(mktemp -d "$RUNNER_TEMP/musictag-dmg.XXXXXX")"
+          trap 'rm -rf "$STAGING_DIR"' EXIT
+          ditto dist/MusicTag.app "$STAGING_DIR/MusicTag.app"
+          ln -s /Applications "$STAGING_DIR/Applications"
+          DMG_PATH="$GITHUB_WORKSPACE/dist/MusicTag-${RELEASE_TAG}-universal.dmg"
+          hdiutil create -volname MusicTag -srcfolder "$STAGING_DIR" \
+            -fs HFS+ -format UDZO -ov "$DMG_PATH"
+          hdiutil verify "$DMG_PATH"
+          echo "DMG_PATH=$DMG_PATH" >> "$GITHUB_ENV"
+
+      - name: Create Release or update its DMG attachment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$DMG_PATH" --clobber
+          else
+            gh release create "$RELEASE_TAG" "$DMG_PATH" \
+              --verify-tag --title "$RELEASE_TAG" --generate-notes
+          fi

@@ -1,0 +1,27 @@
+{
+  "code": 0,
+  "data": {
+    "song": {
+      "list": [
+        {
+          "songid": 97773,
+          "songmid": "0039MnYb0qxYhV",
+          "songname": "晴天",
+          "singer": [
+            {
+              "id": 4558,
+              "mid": "0025NhlN2yWrP4",
+              "name": "周杰伦",
+              "name_hilight": "<em>周杰伦</em>"
+            }
+          ],
+          "albumname": "叶惠美",
+          "albummid": "000MkMni19ClKG",
+          "cdIdx": 3,
+          "belongCD": 0,
+          "pubtime": 1059580800
+        }
+      ]
+    }
+  }
+}
