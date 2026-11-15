@@ -1,6 +1,6 @@
 # MusicTag for Mac
 
-原生 Swift 音乐标签编辑器，参考工作区 Windows MusicTag 的左侧编辑栏与右侧文件表格，采用 macOS 系统控件。需要 macOS 13 或更新版本，默认构建为 Apple Silicon 版。
+原生 Swift 音乐标签编辑器，采用 macOS 系统控件。需要 macOS 13 或更新版本，默认构建为 Apple Silicon 版。
 
 ## 使用
 
