@@ -114,7 +114,6 @@ struct MainView: View {
         .alert("操作提示", isPresented: Binding(get: { store.alert != nil }, set: { if !$0 { store.alert = nil } })) { Button("好", role: .cancel) { store.alert = nil } } message: { Text(store.alert ?? "") }
         .sheet(isPresented: $store.showLookup) { LookupView().environmentObject(store) }
         .sheet(isPresented: $store.showRename) { RenameView().environmentObject(store) }
-        .onChange(of: store.selection) { _ in NSApp.keyWindow?.makeFirstResponder(nil) }
     }
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
