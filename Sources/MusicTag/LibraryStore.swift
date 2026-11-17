@@ -54,6 +54,30 @@ struct TagField: Identifiable {
     private var undoHistory: [[UUID: AudioTags]] = []
     private var lastEditKey = ""
     private var lastEditTime = Date.distantPast
+    private static let lastDirectoryPathsKey = "lastImportedDirectoryPaths"
+    private let defaults: UserDefaults
+    private var didAttemptDirectoryRestore = false
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        super.init()
+    }
+
+    private static func isExistingDirectory(_ url: URL) -> Bool {
+        var directory: ObjCBool = false
+        return url.isFileURL && FileManager.default.fileExists(atPath: url.path, isDirectory: &directory) && directory.boolValue
+    }
+
+    func restoreLastDirectories() {
+        guard !didAttemptDirectoryRestore else { return }
+        didAttemptDirectoryRestore = true
+        // An explicit file-open request at launch takes precedence over restoration.
+        guard tracks.isEmpty, !busy else { return }
+        let directories = (defaults.stringArray(forKey: Self.lastDirectoryPathsKey) ?? [])
+            .map { URL(fileURLWithPath: $0, isDirectory: true) }
+            .filter(Self.isExistingDirectory)
+        if !directories.isEmpty { importURLs(directories, rememberDirectories: false) }
+    }
 
     var selected: [TrackItem] { tracks.filter { selection.contains($0.id) } }
     var first: TrackItem? { selected.first }
@@ -128,8 +152,12 @@ struct TagField: Identifiable {
         panel.message = folder ? "选择音乐文件夹，将递归导入其中的音频文件" : "选择音乐文件或文件夹"
         if panel.runModal() == .OK { importURLs(panel.urls) }
     }
-    func importURLs(_ urls: [URL]) {
+    func importURLs(_ urls: [URL], rememberDirectories: Bool = true) {
         guard !busy else { status = "请等待当前操作完成后再添加音乐"; return }
+        if rememberDirectories {
+            let paths = urls.filter(Self.isExistingDirectory).map { $0.standardizedFileURL.path }
+            if !paths.isEmpty { defaults.set(paths, forKey: Self.lastDirectoryPathsKey) }
+        }
         busy = true
         status = "正在读取音乐…"
         let known = Set(tracks.map { $0.url.standardizedFileURL.path })

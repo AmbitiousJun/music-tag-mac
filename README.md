@@ -70,6 +70,6 @@ git push origin v1.2.3
 
 ## 边界与分析资料
 
-撤销和还原针对当前会话的标签：`⌘Z` 撤销标签修改，“还原”恢复到最近保存值。没有持久化标签历史或自动备份库；重命名直接修改原文件名。目录和歌曲列表不会跨启动保存。
+撤销和还原针对当前会话的标签：`⌘Z` 撤销标签修改，“还原”恢复到最近保存值。没有持久化标签历史或自动备份库；重命名直接修改原文件名。应用会记住最近一次导入的文件夹（支持多选及拖入），下次启动时重新扫描仍存在的目录；目录不存在则保持空列表。单独添加歌曲不会覆盖目录记录，未保存的标签修改不会跨启动恢复。
 
 本项目未执行 Windows 原程序，也未承诺所有原程序格式和在线来源逐项等价。REA 静态证据、界面布局提取和功能映射保存在 [analysis/report.md](analysis/report.md)。QQ 音乐与网易云音乐的实现依据 REA 对 Windows 程序及配套 DLL 的分析，详情见 [来源迁移报告](analysis/2026-11-15_来源迁移-MusicTag-report.md)。网络接口可能由提供方调整；QQ 搜索包含官方兼容接口回退。在线实现也保留 [iTunes Search](https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/iTuneSearchAPI/UnderstandingSearchResults.html) 和 [LRCLIB](https://lrclib.net/docs)；当前验收状态见上述交付记录。
