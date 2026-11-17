@@ -36,7 +36,20 @@ struct TagField: Identifiable {
 }
 
 @MainActor final class LibraryStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
-    static let shared = LibraryStore()
+    static let shared: LibraryStore = {
+        #if UI_TESTING
+        // Only the Xcode test build accepts an isolated session. The shipping
+        // swiftc build never reads this argument or changes its defaults domain.
+        let arguments = ProcessInfo.processInfo.arguments
+        if let index = arguments.firstIndex(of: "--ui-test-session"),
+           arguments.indices.contains(index + 1),
+           let session = UUID(uuidString: arguments[index + 1]),
+           let defaults = UserDefaults(suiteName: "app.musictag.mac.uitesting.\(session.uuidString)") {
+            return LibraryStore(defaults: defaults)
+        }
+        #endif
+        return LibraryStore()
+    }()
     static let readableExtensions: Set<String> = ["mp3", "flac", "m4a", "mp4", "wav", "wave", "aif", "aiff", "aifc", "aac", "caf", "ogg", "opus", "wma", "ape", "wv", "dsf", "dff"]
     @Published var tracks: [TrackItem] = []
     @Published var selection = Set<UUID>()

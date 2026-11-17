@@ -80,24 +80,24 @@ struct MainView: View {
             HStack(spacing: 10) {
                 if store.busy { ProgressView().controlSize(.small).scaleEffect(0.75).frame(width: 14, height: 14) }
                 else { Image(systemName: "checkmark.circle").foregroundStyle(.secondary) }
-                Text(store.status).lineLimit(1)
+                Text(store.status).lineLimit(1).accessibilityIdentifier("library.status")
                 Spacer()
-                Text("\(store.tracks.count) 首音乐").foregroundStyle(.secondary)
-                if !store.selection.isEmpty { Text("已选 \(store.selection.count) 首").foregroundStyle(.secondary) }
-                if store.dirtyCount > 0 { Text("\(store.dirtyCount) 首待保存").foregroundStyle(.orange) }
+                Text("\(store.tracks.count) 首音乐").foregroundStyle(.secondary).accessibilityIdentifier("library.count")
+                if !store.selection.isEmpty { Text("已选 \(store.selection.count) 首").foregroundStyle(.secondary).accessibilityIdentifier("library.selectionCount") }
+                if store.dirtyCount > 0 { Text("\(store.dirtyCount) 首待保存").foregroundStyle(.orange).accessibilityIdentifier("library.dirtyCount") }
             }.font(.system(size: 11)).padding(.horizontal, 16).frame(height: 30).background(.bar)
         }
         .toolbar {
             ToolbarItemGroup(placement: .navigation) {
-                Button { store.openFiles() } label: { Label("添加音乐", systemImage: "plus") }.help("添加音乐或文件夹 · ⌘O").disabled(store.busy)
-                Button { store.openFiles(folder: true) } label: { Label("添加文件夹", systemImage: "folder.badge.plus") }.help("添加音乐文件夹").disabled(store.busy)
+                Button { store.openFiles() } label: { Label("添加音乐", systemImage: "plus") }.help("添加音乐或文件夹 · ⌘O").disabled(store.busy).accessibilityIdentifier("toolbar.addFiles")
+                Button { store.openFiles(folder: true) } label: { Label("添加文件夹", systemImage: "folder.badge.plus") }.help("添加音乐文件夹").disabled(store.busy).accessibilityIdentifier("toolbar.addFolder")
             }
             ToolbarItemGroup(placement: .primaryAction) {
-                Button { store.undo() } label: { Label("撤销", systemImage: "arrow.uturn.backward") }.disabled(!store.canUndo || store.busy)
+                Button { store.undo() } label: { Label("撤销", systemImage: "arrow.uturn.backward") }.disabled(!store.canUndo || store.busy).accessibilityIdentifier("toolbar.undo")
                 Button { store.showLookup = true } label: { Label("搜索标签", systemImage: "sparkle.magnifyingglass") }.disabled(store.selection.isEmpty || store.busy)
-                Button { store.togglePlayback() } label: { Label("试听", systemImage: store.isPlaying ? "pause.fill" : "play.fill") }.disabled(store.first == nil)
+                Button { store.togglePlayback() } label: { Label("试听", systemImage: store.isPlaying ? "pause.fill" : "play.fill") }.disabled(store.first == nil).accessibilityIdentifier("toolbar.play").accessibilityValue(store.isPlaying ? "正在播放" : "已暂停")
                 Divider()
-                Button { store.save(all: true) } label: { Label("保存修改", systemImage: "square.and.arrow.down") }.disabled(store.dirtyCount == 0 || store.busy).help("保存全部修改 · ⇧⌘S")
+                Button { store.save(all: true) } label: { Label("保存修改", systemImage: "square.and.arrow.down") }.disabled(store.dirtyCount == 0 || store.busy).help("保存全部修改 · ⇧⌘S").accessibilityIdentifier("toolbar.saveAll")
             }
         }
         .overlay { if dragOver { RoundedRectangle(cornerRadius: 10).stroke(Color.accentColor, lineWidth: 3).padding(4).allowsHitTesting(false) } }
@@ -156,7 +156,7 @@ struct MainView: View {
             }.padding(.horizontal, 22).padding(.top, 22).padding(.bottom, 16)
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("搜索标题、艺术家、专辑或文件名", text: $store.query).textFieldStyle(.plain)
+                TextField("搜索标题、艺术家、专辑或文件名", text: $store.query).textFieldStyle(.plain).accessibilityIdentifier("library.search")
                 if !store.query.isEmpty { Button { store.query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain) }
             }.padding(8).background(Color(nsColor: .quaternaryLabelColor).opacity(0.3), in: RoundedRectangle(cornerRadius: 7)).padding(.horizontal, 22).padding(.bottom, 16)
             Divider()
@@ -189,7 +189,7 @@ struct TagInspector: View {
                         Label("此格式只读，可试听及查看信息", systemImage: "lock").font(.caption).foregroundStyle(.orange)
                     }
                     if let issue = store.first?.issue { Text(issue).font(.caption).foregroundStyle(.orange).textSelection(.enabled) }
-                    Picker("编辑内容", selection: $tab) { Text("标签").tag(0); Text("歌词").tag(1); Text("信息").tag(2) }.pickerStyle(.segmented)
+                    Picker("编辑内容", selection: $tab) { Text("标签").tag(0); Text("歌词").tag(1); Text("信息").tag(2) }.pickerStyle(.segmented).accessibilityIdentifier("inspector.tabs")
                     Group {
                         if tab == 0 { fields }
                         else if tab == 1 { lyrics }
@@ -199,9 +199,9 @@ struct TagInspector: View {
             }
             Divider()
             HStack {
-                Button("还原") { store.revertSelected() }.disabled(store.selected.allSatisfy { !$0.isDirty })
+                Button("还原") { store.revertSelected() }.disabled(store.selected.allSatisfy { !$0.isDirty }).accessibilityIdentifier("inspector.revert")
                 Spacer()
-                Button("保存标签") { store.save() }.buttonStyle(.borderedProminent).disabled(store.selected.allSatisfy { !$0.isDirty })
+                Button("保存标签") { store.save() }.buttonStyle(.borderedProminent).disabled(store.selected.allSatisfy { !$0.isDirty }).accessibilityIdentifier("inspector.save")
             }.padding(14)
         }
     }
@@ -215,7 +215,7 @@ struct TagInspector: View {
                 Text("专辑封面").font(.system(size: 12, weight: .medium))
                 if let data = store.first?.tags.artwork, let image = NSImage(data: data), let rep = image.representations.first { Text("\(rep.pixelsWide) × \(rep.pixelsHigh)").font(.system(size: 10)).foregroundStyle(.secondary) }
                 else { Text("添加一张喜欢的封面").font(.system(size: 10)).foregroundStyle(.secondary) }
-                Button("选择图片…") { store.chooseArtwork() }.controlSize(.small).disabled(!store.hasWritableSelection)
+                Button("选择图片…") { store.chooseArtwork() }.controlSize(.small).disabled(!store.hasWritableSelection).accessibilityIdentifier("artwork.choose")
                 HStack(spacing: 10) {
                     Button("导出") { store.exportArtwork() }.disabled(store.first?.tags.artwork == nil)
                     Button("移除") { store.mutate { $0.artwork = nil } }.disabled(store.first?.tags.artwork == nil || !store.hasWritableSelection)
@@ -229,7 +229,7 @@ struct TagInspector: View {
             ForEach(TagField.all) { field in
                 VStack(alignment: .leading, spacing: 5) {
                     Text(field.name).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
-                    TextField(store.mixed(field.key) ? "多个值" : "填写\(field.name)", text: store.binding(field)).textFieldStyle(.roundedBorder)
+                    TextField(store.mixed(field.key) ? "多个值" : "填写\(field.name)", text: store.binding(field)).textFieldStyle(.roundedBorder).accessibilityIdentifier("tag.\(field.id)")
                 }
             }
             HStack { Button("文件名 → 标签") { store.tagsFromFilename() }; Spacer(); Menu { Button("简体 → 繁体") { store.transformChinese(traditional: true) }; Button("繁体 → 简体") { store.transformChinese(traditional: false) } } label: { Image(systemName: "character.book.closed") }.fixedSize() }.controlSize(.small).padding(.top, 3)
@@ -238,7 +238,7 @@ struct TagInspector: View {
     private var lyrics: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack { Button("导入…") { store.importLyrics() }; Button("导出…") { store.exportLyrics() }; Spacer(); Menu { Button("移除时间标签") { store.cleanLyrics(removeTimes: true) }; Button("移除空行") { store.cleanLyrics(removeTimes: false) } } label: { Image(systemName: "wand.and.stars") }.fixedSize() }.controlSize(.small)
-            TextEditor(text: Binding(get: { store.common(\.lyrics) }, set: { store.set(\.lyrics, $0, name: "歌词") })).font(.system(size: 12, design: .monospaced)).frame(minHeight: 320).padding(6).background(Color(nsColor: .textBackgroundColor)).overlay(RoundedRectangle(cornerRadius: 5).stroke(.secondary.opacity(0.2))).disabled(!store.hasWritableSelection)
+            TextEditor(text: Binding(get: { store.common(\.lyrics) }, set: { store.set(\.lyrics, $0, name: "歌词") })).font(.system(size: 12, design: .monospaced)).frame(minHeight: 320).padding(6).background(Color(nsColor: .textBackgroundColor)).overlay(RoundedRectangle(cornerRadius: 5).stroke(.secondary.opacity(0.2))).disabled(!store.hasWritableSelection).accessibilityIdentifier("tag.lyrics")
             Text(store.mixed(\.lyrics) ? "多个歌词值；编辑后将应用到所有选中音乐。" : "支持纯文本及 LRC 时间标签。保存后嵌入音乐文件。").font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -259,7 +259,7 @@ struct RenameView: View {
         VStack(alignment: .leading, spacing: 18) {
             Text("按标签重命名").font(.title2).fontWeight(.semibold)
             Text("修改原文件名；已存在的同名文件会阻止操作。").foregroundStyle(.secondary)
-            TextField("命名模板", text: $pattern).textFieldStyle(.roundedBorder)
+            TextField("命名模板", text: $pattern).textFieldStyle(.roundedBorder).accessibilityIdentifier("rename.pattern")
             Text("可用字段：{artist}  {title}  {album}  {track}  {year}").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
             ScrollView { VStack(alignment: .leading, spacing: 12) { ForEach(store.selected.prefix(12)) { item in VStack(alignment: .leading, spacing: 4) { Text(item.url.lastPathComponent).foregroundStyle(.secondary); Label(store.renamed(item, pattern: pattern), systemImage: "arrow.turn.down.right") }.font(.system(size: 12)) } } }.frame(height: 210)
             HStack { Spacer(); Button("取消") { store.showRename = false }.keyboardShortcut(.cancelAction); Button("重命名 \(store.selected.count) 个文件") { store.rename(pattern: pattern) }.buttonStyle(.borderedProminent).disabled(pattern.trimmingCharacters(in: .whitespaces).isEmpty) }
