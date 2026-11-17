@@ -134,6 +134,9 @@ struct TagField: Identifiable {
     }
     func set(_ key: WritableKeyPath<AudioTags, String>, _ value: String, name: String) {
         guard !busy, hasWritableSelection else { return }
+        // SwiftUI may write an unchanged value when an editor gains/loses
+        // focus. Such callbacks must not consume an undo step.
+        guard tracks.contains(where: { selection.contains($0.id) && $0.writable && $0.tags[keyPath: key] != value }) else { return }
         remember(name + selection.map(\.uuidString).sorted().joined())
         for i in tracks.indices where selection.contains(tracks[i].id) && tracks[i].writable { tracks[i].tags[keyPath: key] = value }
     }

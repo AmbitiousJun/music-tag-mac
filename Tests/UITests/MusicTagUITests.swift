@@ -193,13 +193,13 @@ final class MusicTagUITests: XCTestCase {
         try importFolder()
         try replace(app.textFields["tag.标题"], with: "Unsaved title")
         app.typeKey("q", modifierFlags: [.command])
-        let back = app.buttons["返回编辑"]
+        let back = app.dialogs.buttons["返回编辑"]
         XCTAssertTrue(back.waitForExistence(timeout: 5))
         back.click()
         try expectValue(app.textFields["tag.标题"], "Unsaved title")
         XCTAssertEqual(try TagEngine.read(from: fixtures.songs[0]).title, "First Song")
         app.typeKey("q", modifierFlags: [.command])
-        let discard = app.buttons["丢弃并退出"]
+        let discard = app.dialogs.buttons["丢弃并退出"]
         XCTAssertTrue(discard.waitForExistence(timeout: 5))
         discard.click()
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 10))
@@ -235,23 +235,34 @@ final class MusicTagUITests: XCTestCase {
         let action = app.buttons["OKButton"]
         XCTAssertTrue(action.waitForExistence(timeout: 5), app.debugDescription)
         app.typeKey("g", modifierFlags: [.command, .shift])
+        app.activate()
         app.typeText(saving ? url.deletingLastPathComponent().path : url.path)
         app.typeKey(.return, modifierFlags: [])
         if saving {
             let filename = app.textFields["saveAsNameTextField"]
             try replace(filename, with: url.lastPathComponent)
         }
-        try waitUntil("File panel confirms the chosen path") { action.exists && action.isEnabled && action.isHittable }
-        action.click()
+        try waitUntil("File panel confirms the chosen path") { action.exists && action.isEnabled }
+        if action.isHittable { action.click() }
+        else {
+            // macOS 15 can report an enabled, visible native panel button as
+            // not hittable. Anchor to that identified button's actual frame,
+            // then still require panel dismissal and verify the file result.
+            XCTAssertFalse(action.frame.isEmpty)
+            action.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        }
         try waitUntil("File panel closes") { !action.exists }
         XCTAssertFalse(app.sheets.buttons["好"].exists, "Unexpected operation alert after selecting a fixture")
     }
     private func replace(_ field: XCUIElement, with text: String, tabToCommit: Bool = true) throws {
+        app.activate()
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.click()
         app.typeKey("a", modifierFlags: [.command])
-        app.typeKey(.delete, modifierFlags: [])
-        if !text.isEmpty { field.typeText(text) }
+        // Replacing a selection is one edit. A separate Delete can produce an
+        // extra undo group on slower hosts, especially for mixed-value fields.
+        if text.isEmpty { app.typeKey(.delete, modifierFlags: []) }
+        else { field.typeText(text) }
         if tabToCommit { app.typeKey(.tab, modifierFlags: []) }
         try expectValue(field, text)
     }
