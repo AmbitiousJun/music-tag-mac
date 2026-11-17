@@ -1,0 +1,18 @@
+name: Validate macOS app icon
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  icon:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check every ICNS representation against its source artwork
+        run: bash scripts/test-icon.sh

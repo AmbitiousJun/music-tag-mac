@@ -2,9 +2,6 @@ import AppKit
 
 let destination = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
 try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
-func integer(_ value: Int) -> Data { Data((0..<4).map { UInt8(truncatingIfNeeded: value >> ((3 - $0) * 8)) }) }
-var entries = Data()
-let types = [16: ["icp4", "ic11"], 32: ["icp5", "ic12"], 128: ["ic07", "ic13"], 256: ["ic08", "ic14"], 512: ["ic09", "ic10"]]
 for size in [16, 32, 128, 256, 512] {
     for scale in [1, 2] {
         let pixels = size * scale
@@ -37,11 +34,15 @@ for size in [16, 32, 128, 256, 512] {
         let name = "icon_\(size)x\(size)\(scale == 2 ? "@2x" : "").png"
         let png = bitmap.representation(using: .png, properties: [:])!
         try png.write(to: destination.appendingPathComponent(name))
-        entries.append(Data(types[size]![scale - 1].utf8))
-        entries.append(integer(png.count + 8))
-        entries.append(png)
     }
 }
-let icon = Data("icns".utf8) + integer(entries.count + 8) + entries
-guard let image = NSImage(data: icon), image.isValid else { fatalError("Invalid icon") }
-try icon.write(to: destination.deletingLastPathComponent().appendingPathComponent("AppIcon.icns"))
+// Let macOS encode each ICNS representation. In particular, embedding PNG bytes
+// directly in icp4/icp5 produces noise in small icons used by Spotlight.
+let encoder = Process()
+encoder.executableURL = URL(fileURLWithPath: "/usr/bin/iconutil")
+encoder.arguments = ["--convert", "icns", "--output",
+                     destination.deletingLastPathComponent().appendingPathComponent("AppIcon.icns").path,
+                     destination.path]
+try encoder.run()
+encoder.waitUntilExit()
+guard encoder.terminationStatus == 0 else { fatalError("iconutil failed to encode AppIcon.icns") }
