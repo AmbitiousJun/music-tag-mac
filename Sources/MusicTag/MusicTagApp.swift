@@ -6,9 +6,10 @@ import UniformTypeIdentifiers
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        LibraryStore.shared.restoreLastDirectories()
     }
     func application(_ sender: NSApplication, openFiles filenames: [String]) {
-        Task { @MainActor in LibraryStore.shared.importURLs(filenames.map { URL(fileURLWithPath: $0) }) }
+        LibraryStore.shared.importURLs(filenames.map { URL(fileURLWithPath: $0) })
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
