@@ -40,18 +40,19 @@ open dist/MusicTag.app
 
 ## 技术架构与源码目录
 
-界面采用 SwiftUI，音乐列表使用系统原生 Table；AppKit 负责文件面板、窗口和应用生命周期，AVFoundation 负责音频信息和试听。`LibraryStore` 在主线程维护音乐、选中项与编辑状态，标签引擎直接读写本地元数据。项目通过 `swiftc` 编译，不依赖第三方运行时。
+主界面采用 SwiftUI，音乐列表通过 `NSViewRepresentable` 接入 AppKit 的 `NSTableView`，由原生控件处理鼠标、键盘、多选与右键菜单。AppKit 同时负责文件面板、窗口和应用生命周期，AVFoundation 负责音频信息和试听。`LibraryStore` 在主线程维护音乐、选中项与编辑状态，标签引擎直接读写本地元数据。项目通过 `swiftc` 编译，不依赖第三方运行时。
 
 ```text
 Sources/MusicTag/
-├── MusicTagApp.swift   # 应用入口、主窗口、音乐列表和标签编辑界面
+├── MusicTagApp.swift   # 应用入口、主窗口和标签编辑界面
+├── TrackTable.swift    # 原生音乐列表、选择同步和右键菜单
 ├── LibraryStore.swift  # 导入、目录恢复、选择、批量编辑、保存与试听
 ├── TagEngine.swift     # 音频标签读取和写入
 ├── MP4Tags.swift       # M4A / MP4 元数据处理
 ├── OnlineLookup.swift # 在线标签和歌词来源
 └── LookupView.swift   # 在线搜索界面
 Resources/             # 应用信息
-Tests/                 # 标签、业务、原生列表焦点、在线来源和图标测试
+Tests/                 # 标签、业务、原生列表交互、在线来源和图标测试
 scripts/               # 构建、图标生成与测试脚本
 .github/workflows/     # 图标、列表交互验证与自动发布
 ```
@@ -77,7 +78,7 @@ git push origin v1.2.3
 ./scripts/test.sh
 ```
 
-原生音乐列表回归测试不需要 FFmpeg，会在独立测试窗口中验证目录导入后的连续切换、多选、编辑目标和焦点保留：
+原生音乐列表回归测试不需要 FFmpeg，需要 macOS 桌面会话。测试会在独立窗口中发送鼠标和键盘事件，验证目录导入后各列点击、上下键、Shift/⌘ 多选、编辑目标、右键菜单、筛选排序和焦点保留：
 
 ```bash
 bash scripts/test-selection.sh

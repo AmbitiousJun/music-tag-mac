@@ -3,7 +3,7 @@ import AVFoundation
 import SwiftUI
 import UniformTypeIdentifiers
 
-struct TrackItem: Identifiable {
+struct TrackItem: Identifiable, Equatable {
     let id: UUID
     var url: URL
     var tags: AudioTags

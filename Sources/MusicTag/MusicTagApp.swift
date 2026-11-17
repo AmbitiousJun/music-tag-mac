@@ -162,23 +162,7 @@ struct MainView: View {
             Divider()
             if store.tracks.isEmpty { emptyLibrary }
             else {
-                Table(store.visible, selection: $store.selection) {
-                    TableColumn("标题") { item in
-                        HStack(spacing: 8) { Circle().fill(item.isDirty ? Color.orange : Color.clear).frame(width: 5, height: 5); Image(systemName: item.issue == nil ? "music.note" : "exclamationmark.triangle").foregroundStyle(item.issue == nil ? Color.secondary : Color.orange); VStack(alignment: .leading, spacing: 3) { Text(item.title).fontWeight(.medium).lineLimit(1); Text(item.url.lastPathComponent).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1) } }.padding(.vertical, 5).help(item.url.path)
-                    }.width(min: 160, ideal: 220)
-                    TableColumn("艺术家") { Text($0.tags.artist.isEmpty ? "—" : $0.tags.artist).foregroundStyle(.secondary).lineLimit(1) }.width(min: 75, ideal: 110)
-                    TableColumn("专辑") { Text($0.tags.album.isEmpty ? "—" : $0.tags.album).foregroundStyle(.secondary).lineLimit(1) }.width(min: 80, ideal: 120)
-                    TableColumn("格式") { item in Text(item.format).font(.system(size: 10, weight: .medium, design: .monospaced)).foregroundStyle(.secondary).help(item.writable ? "支持标签编辑" : "只读格式") }.width(48)
-                    TableColumn("时长") { Text($0.time).monospacedDigit().foregroundStyle(.secondary) }.width(44)
-                }.contextMenu {
-                    Button("保存标签") { store.save() }.disabled(store.selection.isEmpty || store.busy)
-                    Button("试听 / 暂停") { store.togglePlayback() }.disabled(store.selection.isEmpty)
-                    Button("在访达中显示") { store.reveal() }.disabled(store.selection.isEmpty)
-                    Divider()
-                    Button("文件名 → 标签") { store.tagsFromFilename() }.disabled(store.selection.isEmpty || store.busy)
-                    Button("标签 → 文件名…") { store.showRename = true }.disabled(store.selection.isEmpty || store.busy)
-                    Button("从列表移除") { store.removeSelected() }.disabled(store.selection.isEmpty || store.busy)
-                }
+                TrackTable(store: store).frame(maxWidth: .infinity, maxHeight: .infinity)
                 if store.visible.isEmpty { Text("没有符合条件的音乐").foregroundStyle(.secondary).padding() }
             }
         }.background(Color(nsColor: .textBackgroundColor))
