@@ -38,6 +38,25 @@ open dist/MusicTag.app
 ./scripts/build.sh --universal
 ```
 
+## 技术架构与源码目录
+
+主界面采用 SwiftUI，音乐列表通过 `NSViewRepresentable` 接入 AppKit 的 `NSTableView`，由原生控件处理鼠标、键盘、多选与右键菜单。AppKit 同时负责文件面板、窗口和应用生命周期，AVFoundation 负责音频信息和试听。`LibraryStore` 在主线程维护音乐、选中项与编辑状态，标签引擎直接读写本地元数据。项目通过 `swiftc` 编译，不依赖第三方运行时。
+
+```text
+Sources/MusicTag/
+├── MusicTagApp.swift   # 应用入口、主窗口和标签编辑界面
+├── TrackTable.swift    # 原生音乐列表、选择同步和右键菜单
+├── LibraryStore.swift  # 导入、目录恢复、选择、批量编辑、保存与试听
+├── TagEngine.swift     # 音频标签读取和写入
+├── MP4Tags.swift       # M4A / MP4 元数据处理
+├── OnlineLookup.swift # 在线标签和歌词来源
+└── LookupView.swift   # 在线搜索界面
+Resources/             # 应用信息
+Tests/                 # 标签、业务、原生列表交互、在线来源和图标测试
+scripts/               # 构建、图标生成与测试脚本
+.github/workflows/     # 图标、列表交互验证与自动发布
+```
+
 ## 自动发布
 
 将以 `v` 开头的版本 Tag 推送到 GitHub，会触发 `.github/workflows/release.yml`，构建同时包含 arm64 和 x86_64（amd64）的通用版 `MusicTag.app`，并打包为 `MusicTag-v版本号-universal.dmg`。DMG 内包含 App 和“应用程序”目录快捷方式，可拖入安装。
@@ -57,6 +76,12 @@ git push origin v1.2.3
 
 ```bash
 ./scripts/test.sh
+```
+
+原生音乐列表回归测试不需要 FFmpeg，需要 macOS 桌面会话。测试会在独立窗口中发送鼠标和键盘事件，验证目录导入后各列点击、上下键、Shift/⌘ 多选、编辑目标、右键菜单、筛选排序和焦点保留：
+
+```bash
+bash scripts/test-selection.sh
 ```
 
 也可以通过 `FFMPEG`、`FFPROBE` 环境变量指定工具的绝对路径。在线接口测试单独执行，会向公开服务发送固定的测试关键词 `周杰伦 晴天`、`陈奕迅 十年` 和 `The Beatles Yesterday`：

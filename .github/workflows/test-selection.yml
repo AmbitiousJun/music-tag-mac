@@ -1,0 +1,20 @@
+name: Validate music selection
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  selection:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check native music selection and focus
+        run: bash scripts/test-selection.sh
+      - name: Build and verify the macOS app
+        run: bash scripts/build.sh
