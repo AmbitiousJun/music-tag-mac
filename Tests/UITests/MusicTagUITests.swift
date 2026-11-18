@@ -92,6 +92,37 @@ final class MusicTagUITests: XCTestCase {
         try expectLabel("library.count", "0 首音乐")
     }
 
+    func testSortMenuAndBatchLookupSourcePicker() throws {
+        try importFolder()
+        try selectSong(0)
+        let sort = app.descendants(matching: .any).matching(identifier: "library.sort").firstMatch
+        let batch = app.buttons["library.batchLookup"]
+        XCTAssertTrue(sort.isEnabled)
+        XCTAssertFalse(batch.isEnabled)
+        try replace(app.textFields["tag.专辑"], with: "ZZZ Album")
+        XCTAssertTrue(sort.isEnabled)
+        sort.click()
+        let album = app.menuItems["专辑"]
+        XCTAssertTrue(album.waitForExistence(timeout: 5))
+        album.click()
+        try waitUntil("Album sorting moves the selected song to the end") { self.row(0).frame.minY > self.row(2).frame.minY }
+
+        XCUIElement.perform(withKeyModifiers: .command) { row(2).click() }
+        try expectLabel("library.selectionCount", "已选 2 首")
+        XCTAssertTrue(batch.isEnabled)
+        batch.click()
+        let source = app.descendants(matching: .any).matching(identifier: "batchLookup.source").firstMatch
+        XCTAssertTrue(source.waitForExistence(timeout: 5))
+        source.click()
+        let netease = app.menuItems["网易云音乐"]
+        XCTAssertTrue(netease.waitForExistence(timeout: 5))
+        netease.click()
+        XCTAssertTrue(app.buttons["batchLookup.start"].isEnabled)
+        app.typeKey(.escape, modifierFlags: [])
+        try waitUntil("Escape closes the source picker sheet") { !source.exists }
+        try expectLabel("library.selectionCount", "已选 2 首")
+    }
+
     func testBatchEditingUndoRevertAndSaveScopes() throws {
         try importFolder()
         try selectSong(0)

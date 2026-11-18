@@ -8,6 +8,8 @@
 2. 在列表选中音乐，在左侧编辑标签、封面和歌词，编辑后可直接点击列表切换音乐。按住 `⌘` 或 `⇧` 多选；修改字段会应用到所选可写文件，未修改字段保留各自值。
 3. 按 `⌘S` 保存所选音乐，`⇧⌘S` 保存全部修改，`⌘Z` 撤销实际标签修改。标签编辑先留在内存，保存后写入原文件。
 
+列表右上角的“排序”可按文件名、艺术家或专辑排列。多选歌曲后，点“批量填充…”并选择 QQ 音乐或网易云音乐，即可逐首匹配标签、封面和歌词。匹配使用歌曲的标题和艺术家，缺少标签时尝试从 `艺术家 - 标题` 文件名取值。匹配不明确的歌曲会跳过，来源缺少的内容会保留本地值。整批可用 `⌘Z` 撤销，确认后再保存。
+
 “音乐”菜单提供歌词导入/导出、简繁转换、文件名填标签和标签生成文件名。重命名模板支持 `{artist}`、`{title}`、`{album}`、`{track}`、`{year}`，例如 `{artist} - {title}`；确认前可以预览。`艺术家 - 标题.mp3` 可通过“文件名 → 标签”快速拆分。
 
 ## 格式
@@ -50,7 +52,7 @@ Sources/MusicTag/
 ├── TagEngine.swift     # 音频标签读取和写入
 ├── MP4Tags.swift       # M4A / MP4 元数据处理
 ├── OnlineLookup.swift # 在线标签和歌词来源
-└── LookupView.swift   # 在线搜索界面
+└── LookupView.swift   # 在线搜索和批量填充界面
 Resources/             # 应用信息
 Tests/                 # 标签、业务、原生列表交互、在线来源和图标测试
 ├── Support/            # XCUITest 与人工验收共用的确定性样本、PCM 哈希校验
@@ -100,7 +102,7 @@ XCUITest 通过控件标识定位，操作真实的文件面板、列表、文�
 
 测试 App 的 Bundle ID 为 `app.musictag.mac.uitesting`，与发布版分开。每个用例使用临时样本目录和独立偏好设置会话，结束后清理；只有 Xcode Debug 构建接受 `--ui-test-session UUID`。发布脚本不启用此入口。首次运行时需亲自完成系统的“Enable UI Automation”身份验证；若结果报告 `Timed out while enabling automation mode`，通常应先检查此授权提示。测试使用英文输入环境，建议切到 ABC 输入法，避免第三方输入法授权打断。运行期间避免操作测试窗口。Computer Use 还需单独开启对应组件的屏幕录制和辅助功能权限。
 
-每次运行的日志和 `MusicTag.xcresult` 保存在 `analysis/tests/ui/run-*`，可用 Xcode 打开结果查看截图、控件树和失败时的样本附件。可用 `MUSICTAG_UI_RESULTS_DIR` 指定输出目录。CI 对每个 PR 执行同一入口，保留结果与日志 14 天；桌面或权限不可用时会报错，不跳过或伪装成功。
+每次运行的日志和 `MusicTag.xcresult` 保存在 `analysis/tests/ui/run-*`，可用 Xcode 打开结果查看截图、控件树和失败时的样本附件。可用 `MUSICTAG_UI_RESULTS_DIR` 指定输出目录。验证工作流在发布时统一手动触发，UI 工作流保留结果与日志 14 天。
 
 人工或 Computer Use 验收可使用同一套一次性样本：
 

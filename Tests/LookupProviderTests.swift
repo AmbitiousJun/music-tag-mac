@@ -90,5 +90,73 @@ private final class StubProtocol: URLProtocol {
         do { _ = try await OnlineLookup.fetch(URL(string: "http://example.com")!, session: session); throw AppError.message("accepted HTTP source") }
         catch let error as AppError { try expect(error.localizedDescription.contains("HTTPS"), "HTTPS restriction") }
         print("PASS request headers, Unicode/special-character escaping, detail POST and transport errors")
+        try await testBatchLookup(session: session)
+    }
+
+    @MainActor private static func testBatchLookup(session: URLSession) async throws {
+        let cover = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jft8AAAAASUVORK5CYII=")!
+        let lyric = "[00:01.00]First song"
+        func song(_ id: Int, _ title: String, _ artist: String, _ album: String, _ duration: Int) -> [String: Any] {
+            ["id": id, "mid": String(id), "title": title, "singer": [["name": artist]],
+             "album": ["title": album, "mid": "Cover\(id)"], "interval": duration]
+        }
+        let rows = [song(1, "First", "Other Artist", "Original", 180),
+                    song(2, "First", "Artist A", "Original", 210),
+                    song(3, "First", "Artist A", "Original", 180),
+                    song(4, "First", "Artist A", "Other Album", 180),
+                    song(5, "Second", "Artist B", "Second Album", 180)]
+        let payload: [String: Any] = ["code": 0, "data": ["body": ["song": ["list": rows]]]]
+        let response = try json(["code": 0, "req_0": payload])
+        StubProtocol.handler = { request in
+            let url = request.url!
+            switch url.host {
+            case "u.y.qq.com": return (200, response)
+            case "y.qq.com": return url.path.contains("Cover3") ? (200, cover) : (200, Data("invalid image".utf8))
+            case "c.y.qq.com":
+                let mid = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "songmid" }?.value
+                return mid == "3" ? (200, try json(["code": 0, "lyric": lyric])) : (503, Data())
+            default: throw AppError.message("Batch lookup used an unexpected source")
+            }
+        }
+
+        func track(_ filename: String, tags: AudioTags) -> TrackItem {
+            TrackItem(id: UUID(), url: URL(fileURLWithPath: "/tmp/\(filename)"), tags: tags, savedTags: tags,
+                      duration: 180, size: 0, sampleRate: 0, channels: 0, issue: nil)
+        }
+        var firstTags = AudioTags()
+        firstTags.album = "Original"
+        firstTags.composer = "Local composer"
+        let first = track("Artist A - First.flac", tags: firstTags)
+        let second = track("Unknown.wav", tags: AudioTags(title: "Second", artist: "ARTIST B", lyrics: "Local lyrics", artwork: cover))
+        let readOnly = track("Read Only.wave", tags: AudioTags())
+        let firstResult = try await OnlineLookup.batchResult(for: first, source: .qq, session: session)
+        let secondResult = try await OnlineLookup.batchResult(for: second, source: .qq, session: session)
+        try expect(firstResult.song.trackId == 3 && firstResult.artwork == cover && firstResult.lyrics == lyric, "Use filename, duration and album to choose the correct recording")
+        try expect(secondResult.song.trackId == 5 && secondResult.artwork == nil && secondResult.lyrics == nil, "Keep the tag match when the image or lyrics fail")
+
+        for (item, reason) in [(track("Artist A - First.flac", tags: AudioTags()), "多个"),
+                               (track("Artist A - Missing.flac", tags: AudioTags()), "没有可靠"),
+                               (track("Artist missing.flac", tags: AudioTags()), "缺少")] {
+            do {
+                _ = try await OnlineLookup.batchResult(for: item, source: .qq, session: session)
+                throw AppError.message("Unsafe batch match")
+            } catch let error as AppError {
+                try expect(error.localizedDescription.contains(reason), "Batch lookup must skip uncertain songs")
+            }
+        }
+
+        let store = LibraryStore()
+        store.tracks = [first, second, readOnly]
+        store.selection = [readOnly.id]
+        let results = [first.id: firstResult, second.id: secondResult, readOnly.id: secondResult]
+        let updated = store.mutateTracks(targetIDs: Set(results.keys)) { id, tags in results[id]?.applying(to: &tags) }
+        try expect(updated == 2 && store.dirtyCount == 2, "Batch results apply to their own writable targets")
+        try expect(store.tracks[0].tags.title == "First" && store.tracks[0].tags.lyrics == lyric && store.tracks[0].tags.composer == "Local composer", "Apply the first song's tags and resources together")
+        try expect(store.tracks[1].tags.title == "Second" && store.tracks[1].tags.lyrics == "Local lyrics" && store.tracks[1].tags.artwork == cover, "Preserve the second song's unavailable resources")
+        try expect(store.tracks[2] == readOnly, "Leave read-only targets untouched")
+        try expect(store.mutateTracks(targetIDs: Set(results.keys)) { id, tags in results[id]?.applying(to: &tags) } == 0, "Retrying identical results produces no undo step")
+        store.undo()
+        try expect(store.tracks == [first, second, readOnly] && !store.canUndo, "Undo all songs in one step")
+        print("PASS batch lookup: per-song matching, ambiguous versions, partial resources, read-only targets and single-step undo")
     }
 }

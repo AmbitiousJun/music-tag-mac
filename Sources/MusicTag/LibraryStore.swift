@@ -15,6 +15,11 @@ struct TrackItem: Identifiable, Equatable {
     var issue: String?
     var isDirty: Bool { tags != savedTags }
     var title: String { tags.title.isEmpty ? url.deletingPathExtension().lastPathComponent : tags.title }
+    var filenameTags: (artist: String?, title: String) {
+        let name = url.deletingPathExtension().lastPathComponent
+        guard let separator = name.range(of: " - ") else { return (nil, name) }
+        return (String(name[..<separator.lowerBound]), String(name[separator.upperBound...]))
+    }
     var format: String { url.pathExtension.uppercased() }
     var writable: Bool { TagEngine.canWrite(url) }
     var time: String { duration.isFinite && duration > 0 ? String(format: "%d:%02d", Int(duration) / 60, Int(duration) % 60) : "—" }
@@ -141,11 +146,21 @@ struct TagField: Identifiable {
         for i in tracks.indices where selection.contains(tracks[i].id) && tracks[i].writable { tracks[i].tags[keyPath: key] = value }
     }
     func mutate(targetIDs: Set<UUID>? = nil, _ body: (inout AudioTags) -> Void) {
-        guard !busy else { return }
-        let targets = targetIDs ?? selection
-        guard tracks.contains(where: { targets.contains($0.id) && $0.writable }) else { return }
-        remember(targetIDs: targets)
-        for i in tracks.indices where targets.contains(tracks[i].id) && tracks[i].writable { body(&tracks[i].tags) }
+        mutateTracks(targetIDs: targetIDs ?? selection) { _, tags in body(&tags) }
+    }
+    @discardableResult
+    func mutateTracks(targetIDs: Set<UUID>, _ body: (UUID, inout AudioTags) -> Void) -> Int {
+        guard !busy, !targetIDs.isEmpty else { return 0 }
+        var updated = tracks
+        var changed = Set<UUID>()
+        for index in updated.indices where targetIDs.contains(updated[index].id) && updated[index].writable {
+            body(updated[index].id, &updated[index].tags)
+            if updated[index].tags != tracks[index].tags { changed.insert(updated[index].id) }
+        }
+        guard !changed.isEmpty else { return 0 }
+        remember(targetIDs: changed)
+        tracks = updated
+        return changed.count
     }
     func undo() {
         guard !busy else { return }
@@ -327,10 +342,9 @@ struct TagField: Identifiable {
         guard !busy, hasWritableSelection else { return }
         remember()
         for i in tracks.indices where selection.contains(tracks[i].id) && tracks[i].writable {
-            let name = tracks[i].url.deletingPathExtension().lastPathComponent
-            let parts = name.components(separatedBy: " - ")
-            if parts.count >= 2 { tracks[i].tags.artist = parts[0]; tracks[i].tags.title = parts.dropFirst().joined(separator: " - ") }
-            else { tracks[i].tags.title = name }
+            let filename = tracks[i].filenameTags
+            if let artist = filename.artist { tracks[i].tags.artist = artist }
+            tracks[i].tags.title = filename.title
         }
         status = "已从文件名填充标签；保存后写入文件"
     }

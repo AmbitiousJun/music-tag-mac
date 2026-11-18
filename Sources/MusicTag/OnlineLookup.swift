@@ -1,5 +1,6 @@
 import Foundation
 import CommonCrypto
+import ImageIO
 import Security
 
 enum LookupSource: String, CaseIterable, Identifiable {
@@ -28,6 +29,7 @@ struct CatalogSong: Identifiable {
     var artworkUrl100: String?
     var trackViewUrl: String?
     var songMid: String?
+    var duration: Double?
     var id: String { "\(source.rawValue):\(trackId)" }
     var artworkURL: URL? { OnlineLookup.httpsURL(artworkUrl100) }
     func applying(to tags: inout AudioTags) {
@@ -38,6 +40,18 @@ struct CatalogSong: Identifiable {
         if let v = releaseDate, v.count >= 4 { tags.year = String(v.prefix(4)) }
         if let v = trackNumber, v > 0 { tags.track = "\(v)" + (trackCount.map { "/\($0)" } ?? "") }
         if let v = discNumber, v > 0 { tags.disc = "\(v)" + (discCount.map { "/\($0)" } ?? "") }
+    }
+}
+
+struct BatchLookupResult {
+    let song: CatalogSong
+    let artwork: Data?
+    let lyrics: String?
+
+    func applying(to tags: inout AudioTags) {
+        song.applying(to: &tags)
+        if let artwork { tags.artwork = artwork }
+        if let lyrics { tags.lyrics = lyrics }
     }
 }
 
@@ -108,6 +122,60 @@ enum OnlineLookup {
         return try parseLyrics(await fetch(request(endpoint, source: song.source), session: session), source: song.source)
     }
 
+    static func batchResult(for track: TrackItem, source: LookupSource, session: URLSession = .shared) async throws -> BatchLookupResult {
+        let filename = track.filenameTags
+        let title = track.tags.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let artist = track.tags.artist.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lookupTitle = title.isEmpty ? filename.title : title
+        let lookupArtist = artist.isEmpty ? (filename.artist ?? "") : artist
+        let titleKey = normalized(lookupTitle)
+        let artistKey = artistNames(lookupArtist)
+        guard !titleKey.isEmpty, !artistKey.isEmpty else {
+            throw AppError.message("缺少标题或艺术家")
+        }
+
+        let songs = try await songs(query: "\(lookupArtist) \(lookupTitle)", source: source, session: session)
+        let matches = songs.filter {
+            normalized($0.trackName ?? "") == titleKey && artistNames($0.artistName ?? "") == artistKey
+        }
+        let durationMatches = matches.filter { song in
+            guard track.duration.isFinite, track.duration > 0, let duration = song.duration else { return true }
+            return abs(track.duration - duration) <= 4
+        }
+        let album = normalized(track.tags.album)
+        let albumMatches = durationMatches.filter { !album.isEmpty && normalized($0.collectionName ?? "") == album }
+        let candidates = albumMatches.isEmpty ? durationMatches : albumMatches
+        guard candidates.count == 1, let song = candidates.first else {
+            throw AppError.message(candidates.isEmpty ? "没有可靠匹配" : "找到多个匹配版本")
+        }
+
+        let detail = (try? await details(song, session: session)) ?? song
+        try Task.checkCancellation()
+        async let cover = batchArtwork(detail.artworkURL ?? song.artworkURL, format: track.format, session: session)
+        async let lyricText = try? lyrics(for: song, session: session)
+        let result = await BatchLookupResult(song: detail, artwork: cover, lyrics: lyricText)
+        try Task.checkCancellation()
+        return result
+    }
+
+    private static func batchArtwork(_ url: URL?, format: String, session: URLSession) async -> Data? {
+        guard let url, let data = try? await fetch(url, session: session),
+              format != "FLAC" || data.count <= 0xffffff - 128,
+              let image = CGImageSourceCreateWithData(data as CFData, nil),
+              CGImageSourceGetCount(image) > 0 else { return nil }
+        return data
+    }
+
+    private static func normalized(_ text: String) -> String {
+        text.folding(options: [.caseInsensitive, .widthInsensitive], locale: nil)
+            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    private static func artistNames(_ text: String) -> Set<String> {
+        Set(text.components(separatedBy: CharacterSet(charactersIn: "/,，、;；"))
+            .map(normalized).filter { !$0.isEmpty })
+    }
+
     static func parseSongs(_ data: Data, source: LookupSource) throws -> [CatalogSong] {
         let root = try object(data)
         try checkCode(root, source: source)
@@ -151,6 +219,7 @@ enum OnlineLookup {
                 song.trackName = string(row["title"]) ?? string(row["name"])
                 song.artistName = names(row["singer"])
                 song.collectionName = string(album["title"]) ?? string(album["name"])
+                song.duration = positive(row["interval"]).map(Double.init)
                 song.releaseDate = string(row["time_public"])
                 song.trackNumber = positive(row["index_album"])
                 // QQ's index_cd is zero based (0 is the first disc).
@@ -165,6 +234,7 @@ enum OnlineLookup {
                 song.trackName = string(row["name"])
                 song.artistName = names(row["ar"] ?? row["artists"])
                 song.collectionName = string(album["name"])
+                song.duration = (positive(row["dt"]) ?? positive(row["duration"])).map { Double($0) / 1000 }
                 song.artworkUrl100 = httpsURL(string(album["picUrl"]))?.absoluteString
                 song.trackNumber = positive(row["no"])
                 song.discNumber = string(row["cd"]).flatMap { Int($0.split(separator: "/").first.map(String.init) ?? "") }.flatMap { $0 > 0 ? $0 : nil }
@@ -173,6 +243,7 @@ enum OnlineLookup {
                 song.trackViewUrl = "https://music.163.com/#/song?id=\(id)"
             case .itunes:
                 song.trackName = string(row["trackName"]); song.artistName = string(row["artistName"]); song.collectionName = string(row["collectionName"])
+                song.duration = positive(row["trackTimeMillis"]).map { Double($0) / 1000 }
                 song.primaryGenreName = string(row["primaryGenreName"]); song.releaseDate = string(row["releaseDate"])
                 song.trackNumber = positive(row["trackNumber"]); song.trackCount = positive(row["trackCount"])
                 song.discNumber = positive(row["discNumber"]); song.discCount = positive(row["discCount"])

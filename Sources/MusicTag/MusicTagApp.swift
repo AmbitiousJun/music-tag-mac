@@ -69,6 +69,7 @@ import UniformTypeIdentifiers
 struct MainView: View {
     @EnvironmentObject var store: LibraryStore
     @State private var dragOver = false
+    @State private var batchLookup: BatchLookupSelection?
     var body: some View {
         VStack(spacing: 0) {
             HSplitView {
@@ -113,6 +114,7 @@ struct MainView: View {
         }
         .alert("操作提示", isPresented: Binding(get: { store.alert != nil }, set: { if !$0 { store.alert = nil } })) { Button("好", role: .cancel) { store.alert = nil } } message: { Text(store.alert ?? "") }
         .sheet(isPresented: $store.showLookup) { LookupView().environmentObject(store) }
+        .sheet(item: $batchLookup) { BatchLookupView(selection: $0).environmentObject(store) }
         .sheet(isPresented: $store.showRename) { RenameView().environmentObject(store) }
     }
     private var sidebar: some View {
@@ -150,9 +152,24 @@ struct MainView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) { Text(store.filter.rawValue).font(.system(size: 22, weight: .semibold)); Text("\(store.visible.count) 首音乐 · 在这里整理每一处细节").font(.caption).foregroundStyle(.secondary) }
                 Spacer()
+                Button {
+                    batchLookup = BatchLookupSelection(tracks: store.selected)
+                } label: {
+                    Label("批量填充…", systemImage: "sparkles")
+                }
+                .buttonStyle(.bordered)
+                .disabled(store.selection.count < 2 || !store.hasWritableSelection || store.busy)
+                .help("为所选歌曲批量填充标签、封面和歌词")
+                .accessibilityIdentifier("library.batchLookup")
                 Menu {
                     Picker("排序方式", selection: $store.sortMode) { Text("文件名").tag(0); Text("艺术家").tag(1); Text("专辑").tag(2) }
-                } label: { Image(systemName: "arrow.up.arrow.down") }.menuStyle(.borderlessButton).fixedSize().help("排序")
+                } label: {
+                    Label("排序", systemImage: "arrow.up.arrow.down")
+                        .foregroundStyle(.primary)
+                }
+                .menuStyle(.borderedButton)
+                .fixedSize()
+                .accessibilityIdentifier("library.sort")
             }.padding(.horizontal, 22).padding(.top, 22).padding(.bottom, 16)
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
