@@ -36,7 +36,20 @@ struct TagField: Identifiable {
 }
 
 @MainActor final class LibraryStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
-    static let shared = LibraryStore()
+    static let shared: LibraryStore = {
+        #if UI_TESTING
+        // Only the Xcode test build accepts an isolated session. The shipping
+        // swiftc build never reads this argument or changes its defaults domain.
+        let arguments = ProcessInfo.processInfo.arguments
+        if let index = arguments.firstIndex(of: "--ui-test-session"),
+           arguments.indices.contains(index + 1),
+           let session = UUID(uuidString: arguments[index + 1]),
+           let defaults = UserDefaults(suiteName: "app.musictag.mac.uitesting.\(session.uuidString)") {
+            return LibraryStore(defaults: defaults)
+        }
+        #endif
+        return LibraryStore()
+    }()
     static let readableExtensions: Set<String> = ["mp3", "flac", "m4a", "mp4", "wav", "wave", "aif", "aiff", "aifc", "aac", "caf", "ogg", "opus", "wma", "ape", "wv", "dsf", "dff"]
     @Published var tracks: [TrackItem] = []
     @Published var selection = Set<UUID>()
@@ -121,6 +134,9 @@ struct TagField: Identifiable {
     }
     func set(_ key: WritableKeyPath<AudioTags, String>, _ value: String, name: String) {
         guard !busy, hasWritableSelection else { return }
+        // SwiftUI may write an unchanged value when an editor gains/loses
+        // focus. Such callbacks must not consume an undo step.
+        guard tracks.contains(where: { selection.contains($0.id) && $0.writable && $0.tags[keyPath: key] != value }) else { return }
         remember(name + selection.map(\.uuidString).sorted().joined())
         for i in tracks.indices where selection.contains(tracks[i].id) && tracks[i].writable { tracks[i].tags[keyPath: key] = value }
     }

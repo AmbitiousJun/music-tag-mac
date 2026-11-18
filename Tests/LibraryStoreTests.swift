@@ -114,6 +114,16 @@ import Foundation
         try check(store.tracks.filter(\.writable).allSatisfy { $0.duration > 0 }, "Writable fixtures must have duration")
         let writable = store.tracks.filter(\.writable)
         let ids = Set(writable.map(\.id))
+        let undoStore = LibraryStore(defaults: defaults)
+        undoStore.tracks = writable
+        undoStore.selection = ids
+        undoStore.set(\.composer, writable[0].tags.composer, name: "composer")
+        try check(!undoStore.canUndo && undoStore.dirtyCount == 0, "An unchanged editor callback must not create undo history")
+        undoStore.set(\.album, "Undo target", name: "album")
+        undoStore.set(\.composer, writable[0].tags.composer, name: "composer")
+        undoStore.undo()
+        try check(undoStore.dirtyCount == 0 && !undoStore.canUndo, "A no-op focus callback must not hide the last real edit from undo")
+        print("PASS undo: unchanged callbacks preserve the last real edit and do not create empty undo steps")
         store.selection = Set(store.tracks.map(\.id))
         store.tagsFromFilename()
         try check(store.dirtyCount == 2 && store.mixed(\.title), "Batch filename parsing must edit writable files only")

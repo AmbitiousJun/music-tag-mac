@@ -15,6 +15,7 @@ struct TrackTable: NSViewRepresentable {
         scroll.borderType = .noBorder
 
         let table = MusicTrackTableView()
+        table.setAccessibilityIdentifier("library.table")
         table.style = .fullWidth
         table.usesAlternatingRowBackgroundColors = true
         table.allowsMultipleSelection = true
@@ -50,18 +51,7 @@ struct TrackTable: NSViewRepresentable {
         guard let table = scroll.documentView as? NSTableView else { return }
         let coordinator = context.coordinator
         coordinator.store = store
-        coordinator.updating = true
-        defer { coordinator.updating = false }
-        let items = store.visible
-        // Selection changes must not rebuild the rows while AppKit tracks a click.
-        if coordinator.items != items {
-            coordinator.items = items
-            table.reloadData()
-        }
-        let indexes = IndexSet(items.indices.filter { store.selection.contains(items[$0].id) })
-        if table.selectedRowIndexes != indexes {
-            table.selectRowIndexes(indexes, byExtendingSelection: false)
-        }
+        coordinator.refresh(table)
     }
 
     static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
@@ -77,6 +67,29 @@ struct TrackTable: NSViewRepresentable {
         var updating = false
 
         init(store: LibraryStore) { self.store = store }
+
+        func refresh(_ table: NSTableView) {
+            // Leaving an inspector field can refresh SwiftUI during mouseDown.
+            // Let AppKit finish tracking and publish its new selection before
+            // synchronizing rows or restoring a selection from the store.
+            if let table = table as? MusicTrackTableView, table.isTrackingMouse {
+                table.afterMouseTracking = { [weak self, weak table] in
+                    if let table { self?.refresh(table) }
+                }
+                return
+            }
+            updating = true
+            defer { updating = false }
+            let visible = store.visible
+            if items != visible {
+                items = visible
+                table.reloadData()
+            }
+            let indexes = IndexSet(visible.indices.filter { store.selection.contains(visible[$0].id) })
+            if table.selectedRowIndexes != indexes {
+                table.selectRowIndexes(indexes, byExtendingSelection: false)
+            }
+        }
 
         func numberOfRows(in tableView: NSTableView) -> Int { items.count }
 
@@ -99,6 +112,7 @@ struct TrackTable: NSViewRepresentable {
             if let reused = tableView.makeView(withIdentifier: column.identifier, owner: self) as? TrackValueCell { cell = reused }
             else { cell = TrackValueCell() }
             cell.identifier = column.identifier
+            cell.label.setAccessibilityIdentifier("track.\(item.url.lastPathComponent).\(column.identifier.rawValue)")
             switch column.identifier.rawValue {
             case "artist": cell.label.stringValue = item.tags.artist.isEmpty ? "—" : item.tags.artist
             case "album": cell.label.stringValue = item.tags.album.isEmpty ? "—" : item.tags.album
@@ -143,6 +157,20 @@ struct TrackTable: NSViewRepresentable {
 }
 
 final class MusicTrackTableView: NSTableView {
+    private(set) var isTrackingMouse = false
+    var afterMouseTracking: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        isTrackingMouse = true
+        defer {
+            isTrackingMouse = false
+            let refresh = afterMouseTracking
+            afterMouseTracking = nil
+            refresh?()
+        }
+        super.mouseDown(with: event)
+    }
+
     override func menu(for event: NSEvent) -> NSMenu? {
         let row = row(at: convert(event.locationInWindow, from: nil))
         guard row >= 0 else { return nil }
@@ -195,6 +223,8 @@ private final class TrackTitleCell: NSTableCellView {
     func configure(_ item: TrackItem) {
         titleLabel.stringValue = item.title
         filenameLabel.stringValue = item.url.lastPathComponent
+        titleLabel.setAccessibilityIdentifier("track.\(item.url.lastPathComponent).title")
+        filenameLabel.setAccessibilityIdentifier("track.\(item.url.lastPathComponent).filename")
         dirty.alphaValue = item.isDirty ? 1 : 0
         symbol.image = NSImage(systemSymbolName: item.issue == nil ? "music.note" : "exclamationmark.triangle", accessibilityDescription: item.issue)
         symbol.contentTintColor = item.issue == nil ? .secondaryLabelColor : .systemOrange

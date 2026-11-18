@@ -1,0 +1,28 @@
+name: Validate real macOS UI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  ui:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run XCUITest against the real app
+        run: bash scripts/test-ui.sh
+      - name: Retain screenshots, accessibility trees and test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: musictag-ui-results
+          path: |
+            analysis/tests/ui/**/MusicTag.xcresult
+            analysis/tests/ui/**/xcodebuild.log
+          if-no-files-found: warn
+          retention-days: 14
