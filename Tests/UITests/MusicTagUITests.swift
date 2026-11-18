@@ -251,7 +251,9 @@ final class MusicTagUITests: XCTestCase {
             let filename = app.textFields["saveAsNameTextField"]
             try replace(filename, with: url.lastPathComponent)
         }
-        try waitUntil("File panel confirms the chosen path") { action.exists && action.isEnabled }
+        try waitUntil("File panel confirms \(url.lastPathComponent)", timeout: 25) {
+            action.exists && action.isEnabled
+        }
         if action.isHittable { action.click() }
         else {
             // macOS 15 can report an enabled, visible native panel button as
@@ -285,10 +287,16 @@ final class MusicTagUITests: XCTestCase {
     private func expectValue(_ element: XCUIElement, _ value: String) throws {
         try waitUntil("Expected field value: \(value)") { element.exists && (element.value as? String) == value }
     }
-    private func waitUntil(_ message: String, timeout: TimeInterval = 10, _ condition: @escaping () -> Bool) throws {
-        let expectation = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in condition() }, object: nil)
-        let result = XCTWaiter.wait(for: [expectation], timeout: timeout)
-        guard result == .completed else { throw UITestFixtures.FixtureError.invalid(message) }
+    private func waitUntil(_ message: String, timeout: TimeInterval = 10, _ condition: () -> Bool) throws {
+        // Query XCUIElement on the test's calling thread. On a slower runner,
+        // a predicate evaluated by XCTWaiter can still be resolving a large
+        // file panel snapshot when the wait times out.
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
+        repeat {
+            if condition() { return }
+            Thread.sleep(forTimeInterval: 0.25)
+        } while ProcessInfo.processInfo.systemUptime < deadline
+        throw UITestFixtures.FixtureError.invalid(message)
     }
     private func verifyAudio() throws {
         for (url, hash) in zip(fixtures.songs, fixtures.audioHashes) {
