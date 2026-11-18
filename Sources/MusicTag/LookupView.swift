@@ -164,3 +164,132 @@ struct LookupView: View {
         store.mutate(targetIDs: targetIDs) { $0.lyrics = text }; message = "已应用歌词，关闭窗口后保存以写入文件"
     }
 }
+
+struct BatchLookupSelection: Identifiable {
+    let id = UUID()
+    let tracks: [TrackItem]
+}
+
+struct BatchLookupView: View {
+    private struct Issue: Identifiable {
+        let id: UUID
+        let title: String
+        let reason: String
+
+        init(_ track: TrackItem, _ reason: String) {
+            id = track.id
+            title = track.url.lastPathComponent
+            self.reason = reason
+        }
+    }
+
+    @EnvironmentObject private var store: LibraryStore
+    @Environment(\.dismiss) private var dismiss
+    let selection: BatchLookupSelection
+    @State private var source: LookupSource = .qq
+    @State private var task: Task<Void, Never>?
+    @State private var completed = 0
+    @State private var currentTitle = ""
+    @State private var summary: String?
+    @State private var issues: [Issue] = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("批量填充").font(.title2).fontWeight(.semibold)
+            Text("为所选 \(selection.tracks.count) 首歌曲分别匹配标签、封面和歌词。")
+                .foregroundStyle(.secondary)
+            Picker("数据源", selection: $source) {
+                Text(LookupSource.qq.name).tag(LookupSource.qq)
+                Text(LookupSource.netease.name).tag(LookupSource.netease)
+            }
+            .fixedSize()
+            .disabled(task != nil)
+            .accessibilityIdentifier("batchLookup.source")
+
+            if task != nil {
+                ProgressView(value: Double(completed), total: Double(selection.tracks.count)) {
+                    Text("正在匹配 \(completed + 1)/\(selection.tracks.count) · \(currentTitle)")
+                        .lineLimit(1)
+                }
+            }
+            if let summary { Text(summary).fontWeight(.medium) }
+            if !issues.isEmpty {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 8) {
+                        ForEach(issues) { issue in
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(issue.title).lineLimit(1)
+                                Text(issue.reason).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(height: 160)
+            }
+            Text("匹配会向所选来源发送歌曲标题和艺术家。保存标签后写入文件。")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Button(task == nil ? (summary == nil ? "取消" : "关闭") : "停止") {
+                    if task == nil { dismiss() } else { cancel(); summary = "已停止批量填充" }
+                }
+                .keyboardShortcut(.cancelAction)
+                Button("开始填充") { start() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(store.busy || task != nil)
+                    .accessibilityIdentifier("batchLookup.start")
+            }
+        }
+        .padding(24)
+        .frame(width: 540)
+        .onDisappear { cancel() }
+    }
+
+    private func start() {
+        guard task == nil, !store.busy else { return }
+        completed = 0
+        summary = nil
+        issues = []
+        currentTitle = selection.tracks.first?.title ?? ""
+        let lookupSource = source
+        store.busy = true
+        task = Task { @MainActor in
+            var results: [UUID: BatchLookupResult] = [:]
+            for track in selection.tracks {
+                guard !Task.isCancelled else { return }
+                currentTitle = track.title
+                if track.writable {
+                    do {
+                        let result = try await OnlineLookup.batchResult(for: track, source: lookupSource)
+                        guard !Task.isCancelled else { return }
+                        results[track.id] = result
+                        let missing = [result.artwork == nil ? "封面" : nil, result.lyrics == nil ? "歌词" : nil].compactMap { $0 }
+                        if !missing.isEmpty { issues.append(Issue(track, "未获取\(missing.joined(separator: "、"))")) }
+                    } catch {
+                        guard !Task.isCancelled else { return }
+                        issues.append(Issue(track, error.localizedDescription))
+                    }
+                } else {
+                    issues.append(Issue(track, "只读格式"))
+                }
+                completed += 1
+            }
+            store.busy = false
+            let updated = store.mutateTracks(targetIDs: Set(results.keys)) { id, tags in results[id]?.applying(to: &tags) }
+            let unmatched = selection.tracks.count - results.count
+            let result = "已匹配 \(results.count) 首 · 更新 \(updated) 首 · 跳过 \(unmatched) 首"
+            summary = result
+            store.status = "批量填充 · \(result)"
+            task = nil
+        }
+    }
+
+    private func cancel() {
+        guard let task else { return }
+        task.cancel()
+        self.task = nil
+        store.busy = false
+        issues = []
+    }
+}
