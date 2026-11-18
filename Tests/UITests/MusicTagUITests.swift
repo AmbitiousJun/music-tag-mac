@@ -141,9 +141,10 @@ final class MusicTagUITests: XCTestCase {
         try choosePath(fixtures.lyrics)
         app.radioButtons["歌词"].click()
         let imported = try String(contentsOf: fixtures.lyrics)
-        try expectValue(lyricsEditor, imported)
+        let editor = try findLyricsEditor()
+        try expectValue(editor, imported)
         let text = imported + "[00:02.00]Edited in the lyrics editor\n"
-        try replace(lyricsEditor, with: text, tabToCommit: false)
+        try replace(editor, with: text, tabToCommit: false)
         app.buttons["inspector.save"].click()
         try expectLabel("library.status", "已保存 1 首音乐")
         let tags = try TagEngine.read(from: fixtures.songs[0])
@@ -163,7 +164,7 @@ final class MusicTagUITests: XCTestCase {
         try expectLabel("library.count", "3 首音乐")
         try selectSong(0)
         app.radioButtons["歌词"].click()
-        try expectValue(lyricsEditor, text)
+        try expectValue(findLyricsEditor(), text)
         XCTAssertFalse(app.buttons["inspector.save"].isEnabled)
     }
 
@@ -211,8 +212,16 @@ final class MusicTagUITests: XCTestCase {
     }
 
     private var table: XCUIElement { app.tables["library.table"] }
-    // SwiftUI applies TextEditor's identifier to its enclosing NSScrollView.
-    private var lyricsEditor: XCUIElement { app.scrollViews["tag.lyrics"].textViews.firstMatch }
+
+    private func findLyricsEditor() throws -> XCUIElement {
+        // SwiftUI exposes the identifier on the text view on macOS 15 and on
+        // its enclosing scroll view on macOS 13.
+        let editor = app.textViews["tag.lyrics"]
+        let enclosedEditor = app.scrollViews["tag.lyrics"].textViews.firstMatch
+        try waitUntil("The lyrics text editor appears") { editor.exists || enclosedEditor.exists }
+        return editor.exists ? editor : enclosedEditor
+    }
+
     private func row(_ index: Int) -> XCUIElement {
         table.staticTexts["track.\(fixtures.songs[index].lastPathComponent).filename"]
     }
