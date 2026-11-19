@@ -98,7 +98,7 @@ bash scripts/test-ui.sh --build-only  # 只编译 App 和测试 Runner
 bash scripts/test-ui.sh -only-testing:MusicTagUITests/MusicTagUITests/testBatchEditingUndoRevertAndSaveScopes
 ```
 
-XCUITest 通过控件标识定位，操作真实的文件面板、列表、文本框、快捷键和右键菜单，覆盖单文件及递归目录导入、取消与重复导入、切歌与 Shift/⌘ 多选、搜索、批量编辑、撤销与还原、所选/全部保存、封面导入、歌词导入/编辑/导出、重命名、移除保留原文件、退出确认及重启恢复。保存后重新读取标签，并用独立 RIFF 解析器核对 PCM SHA-256。
+XCUITest 通过控件标识定位，操作真实的文件面板、列表、文本框、快捷键和右键菜单，覆盖单文件及递归目录导入、取消与重复导入、切歌与 Shift/⌘ 多选、搜索、批量编辑、批量填充的运行与结果布局、撤销与还原、所选/全部保存、封面导入、歌词导入/编辑/导出、重命名、移除保留原文件、退出确认及重启恢复。保存后重新读取标签，并用独立 RIFF 解析器核对 PCM SHA-256。
 
 测试 App 的 Bundle ID 为 `app.musictag.mac.uitesting`，与发布版分开。每个用例使用临时样本目录和独立偏好设置会话，结束后清理；只有 Xcode Debug 构建接受 `--ui-test-session UUID`。发布脚本不启用此入口。首次运行时需亲自完成系统的“Enable UI Automation”身份验证；若结果报告 `Timed out while enabling automation mode`，通常应先检查此授权提示。测试使用英文输入环境，建议切到 ABC 输入法，避免第三方输入法授权打断。运行期间避免操作测试窗口。Computer Use 还需单独开启对应组件的屏幕录制和辅助功能权限。
 
