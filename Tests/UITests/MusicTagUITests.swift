@@ -6,6 +6,7 @@ final class MusicTagUITests: XCTestCase {
     private var fixtures: UITestFixtures!
     private var session: String!
     private var suite: String { "app.musictag.mac.uitesting.\(session!)" }
+    private var batchLookupGate: URL { fixtures.root.appendingPathComponent("release-batch-lookup") }
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -15,6 +16,7 @@ final class MusicTagUITests: XCTestCase {
         app = XCUIApplication()
         // ASCII fixture input must not request activation of a user's third-party IME.
         app.launchArguments = ["--ui-test-session", session, "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launchEnvironment["MUSICTAG_UI_TEST_BATCH_LOOKUP_GATE"] = batchLookupGate.path
         app.launch()
         app.activate()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 15))
@@ -121,6 +123,57 @@ final class MusicTagUITests: XCTestCase {
         app.typeKey(.escape, modifierFlags: [])
         try waitUntil("Escape closes the source picker sheet") { !source.exists }
         try expectLabel("library.selectionCount", "已选 2 首")
+    }
+
+    func testBatchLookupKeepsRowsSeparatedWhileRunningAndAfterwards() throws {
+        try importFolder()
+        try selectSong(0)
+        XCUIElement.perform(withKeyModifiers: .command) { row(2).click() }
+        app.buttons["library.batchLookup"].click()
+
+        let sheet = app.sheets.firstMatch
+        let source = app.descendants(matching: .any).matching(identifier: "batchLookup.source").firstMatch
+        let start = app.buttons["batchLookup.start"]
+        let status = app.staticTexts["batchLookup.status"]
+        let progress = app.descendants(matching: .any).matching(identifier: "batchLookup.progress").firstMatch
+        let notice = app.staticTexts["batchLookup.notice"]
+        XCTAssertTrue(start.waitForExistence(timeout: 5))
+        let idleHeight = sheet.frame.height
+        start.click()
+        XCTAssertTrue(app.buttons["停止"].waitForExistence(timeout: 5))
+        let runningScreenshot = XCTAttachment(screenshot: sheet.screenshot())
+        runningScreenshot.name = "Batch lookup in progress"
+        runningScreenshot.lifetime = .keepAlways
+        add(runningScreenshot)
+        let runningLabel = "正在匹配 1/2 · First Song"
+        try expectLabel("batchLookup.status", runningLabel)
+        XCTAssertFalse(source.isEnabled)
+        XCTAssertTrue(progress.exists)
+        XCTAssertGreaterThanOrEqual(status.frame.minY, source.frame.maxY + 4)
+        XCTAssertGreaterThanOrEqual(progress.frame.minY, status.frame.maxY + 2)
+        XCTAssertGreaterThanOrEqual(notice.frame.minY, progress.frame.maxY + 4)
+        XCTAssertEqual(sheet.frame.height, idleHeight, accuracy: 1)
+
+        try Data().write(to: batchLookupGate)
+        try expectLabel("batchLookup.status", "已匹配 0 首 · 更新 0 首 · 跳过 2 首")
+        let issues = app.scrollViews["batchLookup.issues"]
+        XCTAssertTrue(issues.waitForExistence(timeout: 5))
+        XCTAssertGreaterThanOrEqual(status.frame.minY, source.frame.maxY + 4)
+        XCTAssertGreaterThanOrEqual(issues.frame.minY, status.frame.maxY + 4)
+        XCTAssertGreaterThanOrEqual(notice.frame.minY, issues.frame.maxY + 4)
+        let resultsScreenshot = XCTAttachment(screenshot: sheet.screenshot())
+        resultsScreenshot.name = "Batch lookup with results"
+        resultsScreenshot.lifetime = .keepAlways
+        add(resultsScreenshot)
+
+        try FileManager.default.removeItem(at: batchLookupGate)
+        start.click()
+        XCTAssertTrue(app.buttons["停止"].waitForExistence(timeout: 5))
+        app.buttons["停止"].click()
+        try expectLabel("batchLookup.status", "已停止批量填充")
+        XCTAssertTrue(source.isEnabled)
+        XCTAssertTrue(start.isEnabled)
+        try verifyAudio()
     }
 
     func testBatchEditingUndoRevertAndSaveScopes() throws {

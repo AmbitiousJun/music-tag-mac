@@ -194,6 +194,8 @@ struct BatchLookupView: View {
     @State private var issues: [Issue] = []
 
     var body: some View {
+        let running = task != nil
+        let status = running ? "正在匹配 \(completed + 1)/\(selection.tracks.count) · \(currentTitle)" : summary
         VStack(alignment: .leading, spacing: 16) {
             Text("批量填充").font(.title2).fontWeight(.semibold)
             Text("为所选 \(selection.tracks.count) 首歌曲分别匹配标签、封面和歌词。")
@@ -203,18 +205,25 @@ struct BatchLookupView: View {
                 Text(LookupSource.netease.name).tag(LookupSource.netease)
             }
             .fixedSize()
-            .disabled(task != nil)
+            .disabled(running)
             .accessibilityIdentifier("batchLookup.source")
 
-            if task != nil {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("正在匹配 \(completed + 1)/\(selection.tracks.count) · \(currentTitle)")
-                        .lineLimit(1)
-                    ProgressView(value: Double(completed), total: Double(selection.tracks.count))
-                }
+            // Keep the progress area in the sheet before starting so it does not reflow under the picker.
+            VStack(alignment: .leading, spacing: 6) {
+                Text(status ?? "")
+                    .fontWeight(running ? .regular : .medium)
+                    .lineLimit(1)
+                    .frame(height: 18, alignment: .leading)
+                    .accessibilityHidden(status == nil)
+                    .accessibilityIdentifier("batchLookup.status")
+                ProgressView(value: Double(completed), total: Double(selection.tracks.count))
+                    .progressViewStyle(.linear)
+                    .frame(height: 8)
+                    .opacity(running ? 1 : 0)
+                    .accessibilityHidden(!running)
+                    .accessibilityIdentifier("batchLookup.progress")
             }
-            if let summary { Text(summary).fontWeight(.medium) }
-            if !issues.isEmpty {
+            if !running, !issues.isEmpty {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 8) {
                         ForEach(issues) { issue in
@@ -227,9 +236,11 @@ struct BatchLookupView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .frame(height: 160)
+                .accessibilityIdentifier("batchLookup.issues")
             }
             Text("匹配会向所选来源发送歌曲标题和艺术家。保存标签后写入文件。")
                 .font(.caption).foregroundStyle(.secondary)
+                .accessibilityIdentifier("batchLookup.notice")
             HStack {
                 Spacer()
                 Button(task == nil ? (summary == nil ? "取消" : "关闭") : "停止") {
@@ -263,7 +274,7 @@ struct BatchLookupView: View {
                 currentTitle = track.title
                 if track.writable {
                     do {
-                        let result = try await OnlineLookup.batchResult(for: track, source: lookupSource)
+                        let result = try await lookup(track, source: lookupSource)
                         guard !Task.isCancelled else { return }
                         results[track.id] = result
                         let missing = [result.artwork == nil ? "封面" : nil, result.lyrics == nil ? "歌词" : nil].compactMap { $0 }
@@ -285,6 +296,20 @@ struct BatchLookupView: View {
             store.status = "批量填充 · \(result)"
             task = nil
         }
+    }
+
+    private func lookup(_ track: TrackItem, source: LookupSource) async throws -> BatchLookupResult {
+        #if UI_TESTING
+        if let gate = ProcessInfo.processInfo.environment["MUSICTAG_UI_TEST_BATCH_LOOKUP_GATE"] {
+            // Keep the real sheet in its running state until the UI test releases the fixture.
+            for _ in 0..<400 {
+                if FileManager.default.fileExists(atPath: gate) { break }
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            throw AppError.message("没有可靠匹配")
+        }
+        #endif
+        return try await OnlineLookup.batchResult(for: track, source: source)
     }
 
     private func cancel() {
