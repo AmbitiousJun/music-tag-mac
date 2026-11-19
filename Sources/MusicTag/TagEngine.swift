@@ -297,6 +297,7 @@ private struct FLACTag {
     static func parse(_ source: Data) throws -> FLACTag {
         guard source.count >= 42, source.prefix(4) == Data("fLaC".utf8) else { throw TagError.invalid("FLAC 文件头异常") }
         var blocks: [FLACBlock] = [], tags = AudioTags(), comments: [String] = [], vendor = Data("MusicTag for Mac".utf8), p = 4, last = false, seenComment = false
+        var artists: [String] = []
         while !last {
             guard p <= source.count-4, blocks.count < 100000 else { throw TagError.invalid("FLAC 元数据不完整") }
             let type = source[p] & 127; last = source[p] & 128 != 0
@@ -317,7 +318,9 @@ private struct FLACTag {
                     comments.append(s); c += len
                     if let eq = s.firstIndex(of:"=") {
                         let key = s[..<eq].uppercased(); let val = String(s[s.index(after:eq)...])
-                        if let mapping = map.first(where: { $0.0 == key || ($0.0 == "ALBUMARTIST" && key == "ALBUM ARTIST") || ($0.0 == "DATE" && key == "YEAR") || ($0.0 == "COMMENT" && key == "DESCRIPTION") || ($0.0 == "LYRICS" && key == "UNSYNCEDLYRICS") }) { tags[keyPath:mapping.1] = val }
+                        if key == "ARTIST" {
+                            if !val.isEmpty { artists.append(val) }
+                        } else if let mapping = map.first(where: { $0.0 == key || ($0.0 == "ALBUMARTIST" && key == "ALBUM ARTIST") || ($0.0 == "DATE" && key == "YEAR") || ($0.0 == "COMMENT" && key == "DESCRIPTION") || ($0.0 == "LYRICS" && key == "UNSYNCEDLYRICS") }) { tags[keyPath:mapping.1] = val }
                     }
                 }
                 guard c == block.count else { throw TagError.invalid("Vorbis Comment 存在无法解析的尾部") }
@@ -327,6 +330,7 @@ private struct FLACTag {
             p += n+4
         }
         guard p <= source.count-2, source[p] == 0xff, source[p+1] & 0xfc == 0xf8 else { throw TagError.invalid("FLAC 没有有效音频帧") }
+        tags.artist = artists.joined(separator: "/")
         // Vorbis stores totals separately; expose the same 3/12 notation as ID3 and MP4.
         for (number,aliases,path) in [(tags.track,["TRACKTOTAL","TOTALTRACKS"],\AudioTags.track),(tags.disc,["DISCTOTAL","TOTALDISCS"],\AudioTags.disc)] where !number.isEmpty && !number.contains("/") {
             if let total = comments.compactMap({ line -> String? in guard let eq = line.firstIndex(of:"="), aliases.contains(line[..<eq].uppercased()) else { return nil }; return String(line[line.index(after:eq)...]) }).first, !total.isEmpty { tags[keyPath:path] = number + "/" + total }
@@ -336,9 +340,19 @@ private struct FLACTag {
 
     func replacing(_ tags: AudioTags, source: Data) throws -> [Data] {
         let removed = Set(Self.map.map { $0.0 } + ["ALBUM ARTIST","YEAR","DESCRIPTION","UNSYNCEDLYRICS","TRACKTOTAL","TOTALTRACKS","DISCTOTAL","TOTALDISCS"])
-        var comments = self.comments.filter { line in guard let eq = line.firstIndex(of:"=") else { return true }; return !removed.contains(line[..<eq].uppercased()) }
-        for (name,path) in Self.map where !tags[keyPath:path].isEmpty {
+        var comments: [String] = [], originalArtists: [String] = []
+        for line in self.comments {
+            let key = line.firstIndex(of: "=").map { line[..<$0].uppercased() } ?? ""
+            if !removed.contains(key) { comments.append(line) }
+            if key == "ARTIST", tags.artist == self.tags.artist { originalArtists.append(line) }
+        }
+        for (name,path) in Self.map {
+            if name == "ARTIST", !originalArtists.isEmpty {
+                comments.append(contentsOf: originalArtists)
+                continue
+            }
             let value = tags[keyPath:path]
+            guard !value.isEmpty else { continue }
             if name == "TRACKNUMBER" || name == "DISCNUMBER", let slash = value.firstIndex(of:"/") {
                 comments.append(name + "=" + value[..<slash]); let total = value[value.index(after:slash)...]
                 if !total.isEmpty { comments.append((name == "TRACKNUMBER" ? "TRACKTOTAL=" : "DISCTOTAL=") + total) }

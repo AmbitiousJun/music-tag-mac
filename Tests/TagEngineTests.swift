@@ -15,6 +15,46 @@ import AppKit
         guard try passed() else { throw NSError(domain:"TagTests",code:1,userInfo:[NSLocalizedDescriptionKey:message]) }
     }
     static func audioHash(_ url: URL) throws -> String { try run(["-v","error","-i",url.path,"-map","0:a:0","-f","hash","-hash","sha256","-"]) }
+
+    static func testMultipleFLACArtists(in root: URL) throws {
+        var source = try Data(contentsOf: root.appendingPathComponent("roundtrip.flac"))
+        // The writer puts the Vorbis comment immediately after the 34-byte STREAMINFO block.
+        let offset = 42
+        try check(source.count > offset + 4 && source[offset] == 4, "Missing FLAC comments fixture")
+        let originalLength = source[(offset + 1)..<(offset + 4)].reduce(0) { ($0 << 8) | Int($1) }
+        var comment = Data()
+        func appendNumber(_ number: UInt32) {
+            var value = number.littleEndian
+            withUnsafeBytes(of: &value) { comment.append(contentsOf: $0) }
+        }
+        let artists = ["ARTIST=First Artist", "artist=第二位歌手", "Artist=Third Artist"]
+        appendNumber(0) // Vendor length.
+        appendNumber(UInt32(artists.count))
+        for artist in artists {
+            appendNumber(UInt32(artist.utf8.count))
+            comment.append(contentsOf: artist.utf8)
+        }
+        let length = comment.count
+        let block = Data([4, UInt8(length >> 16), UInt8((length >> 8) & 255), UInt8(length & 255)]) + comment
+        source.replaceSubrange(offset..<(offset + 4 + originalLength), with: block)
+        let url = root.appendingPathComponent("multiple-artists.flac")
+        try source.write(to: url)
+
+        let before = try audioHash(url)
+        var tags = try TagEngine.read(from: url)
+        try check(tags.artist == "First Artist/第二位歌手/Third Artist", "Read all FLAC artists in order")
+        tags.title = "New title"
+        try TagEngine.write(tags, to: url)
+        let saved = try Data(contentsOf: url)
+        try check(try TagEngine.read(from: url) == tags, "Preserve all FLAC artists when saving another field")
+        try check(artists.allSatisfy { saved.range(of: Data($0.utf8)) != nil }, "Preserve the original separate artist fields")
+        tags.artist = "New artist"
+        try TagEngine.write(tags, to: url)
+        try check(try TagEngine.read(from: url) == tags, "Replace every old FLAC artist when the artist is edited")
+        try check(try audioHash(url) == before, "Editing multiple FLAC artists changed the audio")
+        print("PASS FLAC: read and preserve repeatable ARTIST comments, intentional edits and original audio SHA-256")
+    }
+
     static func main() throws {
         let root = URL(fileURLWithPath:CommandLine.arguments.dropFirst().first ?? "analysis/tests",isDirectory:true)
         try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
@@ -43,6 +83,7 @@ import AppKit
             try check(!emptyExternal.contains("Original") && !emptyExternal.contains("测试标题"),"\(ext): independent parser sees stale tags")
             print("PASS \(ext): all fields, cover, lyrics, clearing, repeat save, audio SHA-256")
         }
+        try testMultipleFLACArtists(in: root)
         for version in [3,4] {
             let url = root.appendingPathComponent("id3-v2.\(version).mp3")
             _ = try run(["-v","error","-y","-f","lavfi","-i","sine=frequency=400:duration=0.2","-c:a","libmp3lame","-id3v2_version",String(version),"-metadata","title=Original","-metadata","custom_keep=Preserve me",url.path])
