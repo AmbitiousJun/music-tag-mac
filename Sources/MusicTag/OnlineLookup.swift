@@ -135,16 +135,28 @@ enum OnlineLookup {
         }
 
         let songs = try await songs(query: "\(lookupArtist) \(lookupTitle)", source: source, session: session)
-        let matches = songs.filter {
-            normalized($0.trackName ?? "") == titleKey && artistNames($0.artistName ?? "") == artistKey
-        }
-        let durationMatches = matches.filter { song in
-            guard track.duration.isFinite, track.duration > 0, let duration = song.duration else { return true }
+        let artistMatches = songs.filter { artistNames($0.artistName ?? "") == artistKey }
+        func matchesDuration(_ song: CatalogSong, whenUnknown: Bool) -> Bool {
+            guard track.duration.isFinite, track.duration > 0, let duration = song.duration else { return whenUnknown }
             return abs(track.duration - duration) <= 4
         }
+        let exactMatches = artistMatches.filter {
+            normalized($0.trackName ?? "") == titleKey && matchesDuration($0, whenUnknown: true)
+        }
         let album = normalized(track.tags.album)
-        let albumMatches = durationMatches.filter { !album.isEmpty && normalized($0.collectionName ?? "") == album }
-        let candidates = albumMatches.isEmpty ? durationMatches : albumMatches
+        let candidates: [CatalogSong]
+        if exactMatches.isEmpty, !album.isEmpty {
+            let localBaseTitle = liveBaseTitle(titleKey)
+            candidates = artistMatches.filter { song in
+                let candidateTitle = normalized(song.trackName ?? "")
+                return (liveBaseTitle(candidateTitle) == titleKey || localBaseTitle == candidateTitle)
+                    && normalized(song.collectionName ?? "") == album
+                    && matchesDuration(song, whenUnknown: false)
+            }
+        } else {
+            let albumMatches = exactMatches.filter { !album.isEmpty && normalized($0.collectionName ?? "") == album }
+            candidates = albumMatches.isEmpty ? exactMatches : albumMatches
+        }
         guard candidates.count == 1, let song = candidates.first else {
             throw AppError.message(candidates.isEmpty ? "没有可靠匹配" : "找到多个匹配版本")
         }
@@ -169,6 +181,12 @@ enum OnlineLookup {
     private static func normalized(_ text: String) -> String {
         text.folding(options: [.caseInsensitive, .widthInsensitive], locale: nil)
             .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    private static func liveBaseTitle(_ title: String) -> String? {
+        guard let suffix = ["(live)", "(现场)", "(现场版)", "(現場)", "(現場版)"].first(where: { title.hasSuffix($0) }) else { return nil }
+        let base = title.dropLast(suffix.count).trimmingCharacters(in: .whitespaces)
+        return base.isEmpty ? nil : base
     }
 
     private static func artistNames(_ text: String) -> Set<String> {

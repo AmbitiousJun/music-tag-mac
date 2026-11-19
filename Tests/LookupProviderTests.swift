@@ -97,14 +97,23 @@ private final class StubProtocol: URLProtocol {
         let cover = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jft8AAAAASUVORK5CYII=")!
         let lyric = "[00:01.00]First song"
         func song(_ id: Int, _ title: String, _ artist: String, _ album: String, _ duration: Int) -> [String: Any] {
-            ["id": id, "mid": String(id), "title": title, "singer": [["name": artist]],
+            ["id": id, "mid": String(id), "title": title, "singer": artist.components(separatedBy: "/").map { ["name": $0] },
              "album": ["title": album, "mid": "Cover\(id)"], "interval": duration]
         }
         let rows = [song(1, "First", "Other Artist", "Original", 180),
                     song(2, "First", "Artist A", "Original", 210),
                     song(3, "First", "Artist A", "Original", 180),
                     song(4, "First", "Artist A", "Other Album", 180),
-                    song(5, "Second", "Artist B", "Second Album", 180)]
+                    song(5, "Second", "Artist B", "Second Album", 180),
+                    song(6, "我的骄傲 (Live)", "糖妹/安崎/炎明熹", "声生不息 第10期", 240),
+                    song(7, "我的骄傲 (Radio Mix)", "糖妹/安崎/炎明熹", "声生不息 第10期", 240),
+                    song(8, "我的骄傲 (Live)", "糖妹/安崎", "声生不息 第10期", 240),
+                    song(9, "我的骄傲 (Live)", "糖妹/安崎/炎明熹", "Other Album", 240),
+                    song(10, "我的骄傲 (Live)", "糖妹/安崎/炎明熹", "声生不息 第10期", 230),
+                    song(11, "First (Live)", "Artist A", "Original", 180),
+                    song(12, "Third (Live)", "Artist C", "Third Album", 180),
+                    song(13, "Third（现场版）", "Artist C", "Third Album", 180),
+                    song(14, "Fourth (Live)", "Artist D", "Fourth Album", 0)]
         let payload: [String: Any] = ["code": 0, "data": ["body": ["song": ["list": rows]]]]
         let response = try json(["code": 0, "req_0": payload])
         StubProtocol.handler = { request in
@@ -119,9 +128,9 @@ private final class StubProtocol: URLProtocol {
             }
         }
 
-        func track(_ filename: String, tags: AudioTags) -> TrackItem {
+        func track(_ filename: String, tags: AudioTags, duration: Double = 180) -> TrackItem {
             TrackItem(id: UUID(), url: URL(fileURLWithPath: "/tmp/\(filename)"), tags: tags, savedTags: tags,
-                      duration: 180, size: 0, sampleRate: 0, channels: 0, issue: nil)
+                      duration: duration, size: 0, sampleRate: 0, channels: 0, issue: nil)
         }
         var firstTags = AudioTags()
         firstTags.album = "Original"
@@ -134,9 +143,24 @@ private final class StubProtocol: URLProtocol {
         try expect(firstResult.song.trackId == 3 && firstResult.artwork == cover && firstResult.lyrics == lyric, "Use filename, duration and album to choose the correct recording")
         try expect(secondResult.song.trackId == 5 && secondResult.artwork == nil && secondResult.lyrics == nil, "Keep the tag match when the image or lyrics fail")
 
+        let liveTags = AudioTags(title: "我的骄傲", artist: "糖妹;安崎;炎明熹", album: "声生不息 第10期")
+        let live = track("我的骄傲.flac", tags: liveTags, duration: 240.026667)
+        let liveResult = try await OnlineLookup.batchResult(for: live, source: .qq, session: session)
+        try expect(liveResult.song.trackId == 6 && liveResult.song.trackName == "我的骄傲 (Live)", "Use the confirmed live recording and retain the provider title")
+        var missingAlbum = live
+        missingAlbum.tags.album = ""
+        var missingDuration = live
+        missingDuration.duration = 0
+        var wrongDuration = live
+        wrongDuration.duration = 250
+        let ambiguousLive = track("Artist C - Third.flac", tags: AudioTags(album: "Third Album"))
+        let unknownCatalogDuration = track("Artist D - Fourth.flac", tags: AudioTags(album: "Fourth Album"))
         for (item, reason) in [(track("Artist A - First.flac", tags: AudioTags()), "多个"),
                                (track("Artist A - Missing.flac", tags: AudioTags()), "没有可靠"),
-                               (track("Artist missing.flac", tags: AudioTags()), "缺少")] {
+                               (track("Artist missing.flac", tags: AudioTags()), "缺少"),
+                               (missingAlbum, "没有可靠"), (missingDuration, "没有可靠"),
+                               (wrongDuration, "没有可靠"), (unknownCatalogDuration, "没有可靠"),
+                               (ambiguousLive, "多个")] {
             do {
                 _ = try await OnlineLookup.batchResult(for: item, source: .qq, session: session)
                 throw AppError.message("Unsafe batch match")
@@ -157,6 +181,6 @@ private final class StubProtocol: URLProtocol {
         try expect(store.mutateTracks(targetIDs: Set(results.keys)) { id, tags in results[id]?.applying(to: &tags) } == 0, "Retrying identical results produces no undo step")
         store.undo()
         try expect(store.tracks == [first, second, readOnly] && !store.canUndo, "Undo all songs in one step")
-        print("PASS batch lookup: per-song matching, ambiguous versions, partial resources, read-only targets and single-step undo")
+        print("PASS batch lookup: per-song matching, confirmed live versions, ambiguous versions, partial resources, read-only targets and single-step undo")
     }
 }

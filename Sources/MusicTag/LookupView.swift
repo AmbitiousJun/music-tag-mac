@@ -207,9 +207,10 @@ struct BatchLookupView: View {
             .accessibilityIdentifier("batchLookup.source")
 
             if task != nil {
-                ProgressView(value: Double(completed), total: Double(selection.tracks.count)) {
+                VStack(alignment: .leading, spacing: 6) {
                     Text("正在匹配 \(completed + 1)/\(selection.tracks.count) · \(currentTitle)")
                         .lineLimit(1)
+                    ProgressView(value: Double(completed), total: Double(selection.tracks.count))
                 }
             }
             if let summary { Text(summary).fontWeight(.medium) }
@@ -242,6 +243,7 @@ struct BatchLookupView: View {
             }
         }
         .padding(24)
+        .fixedSize(horizontal: false, vertical: true)
         .frame(width: 540)
         .onDisappear { cancel() }
     }
