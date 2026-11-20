@@ -94,6 +94,43 @@ final class MusicTagUITests: XCTestCase {
         try expectLabel("library.count", "0 首音乐")
     }
 
+    func testPlaybackControlsFollowSelection() throws {
+        try importFolder()
+        let playback = app.toolbars.buttons.matching(identifier: "toolbar.play").firstMatch
+        func expectAction(_ title: String) throws {
+            try waitUntil("Playback action: \(title)") {
+                playback.exists && playback.isEnabled && playback.label == title
+            }
+        }
+
+        try selectSong(0)
+        try expectAction("播放试听")
+        playback.click()
+        try expectAction("停止试听")
+
+        try selectSong(1)
+        try expectAction("播放试听")
+        try selectSong(0)
+        try expectAction("停止试听")
+        playback.click()
+        try expectAction("播放试听")
+
+        playback.click()
+        try expectAction("停止试听")
+        try selectSong(1)
+        try expectAction("播放试听")
+        playback.click()
+        try expectAction("停止试听")
+        try selectSong(0)
+        try expectAction("播放试听")
+        try selectSong(1)
+        try expectAction("停止试听")
+
+        row(1).rightClick()
+        table.menuItems["停止试听"].click()
+        try expectAction("播放试听")
+    }
+
     func testSortMenuAndBatchLookupSourcePicker() throws {
         try importFolder()
         try selectSong(0)
