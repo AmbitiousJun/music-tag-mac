@@ -56,6 +56,8 @@ enum LyricFormatter {
     private static let headerPattern = try! NSRegularExpression(pattern: #"^(?:\[[A-Za-z][A-Za-z0-9_-]*:[^\]]*\]\s*)+$"#)
     private static let offsetPattern = try! NSRegularExpression(pattern: #"\[offset:\s*([+-]?[0-9]+)\s*\]"#, options: .caseInsensitive)
 
+    static func hasContent(_ text: String) -> Bool { parse(text).hasText }
+
     static func format(original: String, translation: String?, options: LyricOptions) -> String {
         let primary = parse(original)
         let secondary = options.translationEnabled && translation != original ? parse(translation ?? "") : Document()

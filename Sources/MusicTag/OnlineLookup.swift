@@ -119,16 +119,50 @@ enum OnlineLookup {
     }
 
     static func lyrics(for song: CatalogSong, options: LyricOptions = LyricOptions(), session: URLSession = .shared) async throws -> String {
-        let endpoint: URL
         switch song.source {
         case .qq:
-            guard let mid = song.songMid, !mid.isEmpty else { throw AppError.message("QQ 音乐结果缺少歌曲编号") }
-            endpoint = url("https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg", ["songmid": mid, "g_tk": "5381", "format": "json"])
+            return try await qqLyrics(for: song, options: options, session: session)
         case .netease:
-            endpoint = url("https://music.163.com/api/song/lyric", ["os": "pc", "id": String(song.trackId), "lv": "-1", "kv": "-1", "tv": "-1"])
+            let endpoint = url("https://music.163.com/api/song/lyric", ["os": "pc", "id": String(song.trackId), "lv": "-1", "kv": "-1", "tv": "-1"])
+            return try parseLyrics(await fetch(request(endpoint, source: .netease), session: session), source: .netease, options: options)
         default: throw AppError.message("请选择 QQ 音乐、网易云音乐或 LRCLIB 查询歌词")
         }
-        return try parseLyrics(await fetch(request(endpoint, source: song.source), session: session), source: song.source, options: options)
+    }
+
+    private static func qqLyrics(for song: CatalogSong, options: LyricOptions, session: URLSession) async throws -> String {
+        guard let mid = song.songMid, !mid.isEmpty else { throw AppError.message("QQ 音乐结果缺少歌曲编号") }
+        let param: Object = ["songMid": mid, "type": 1, "crypt": 0, "qrc": 0, "trans": options.translationEnabled ? 1 : 0]
+        let client: Object = ["ct": 24, "cv": 4747474, "platform": "yqq.json", "g_tk": 5381]
+        let service: Object = ["module": "music.musichallSong.PlayLyricInfo", "method": "GetPlayLyricInfo", "param": param]
+        let data = try JSONSerialization.data(withJSONObject: ["comm": client, "req_0": service], options: [.sortedKeys])
+        let lyricRequest = request(url("https://u.y.qq.com/cgi-bin/musicu.fcg", ["data": String(decoding: data, as: UTF8.self)]), source: .qq)
+        let modern: String?
+        do {
+            let root = try object(await fetch(lyricRequest, session: session))
+            try checkCode(root, source: .qq)
+            guard let response = root["req_0"] as? Object else { throw invalid(.qq) }
+            try checkCode(response, source: .qq)
+            guard let lyrics = response["data"] as? Object,
+                  integer(lyrics["songID"]) == song.trackId else { throw invalid(.qq) }
+            let result = try formatLyrics(lyrics, source: .qq, options: options)
+            if !options.translationEnabled || result.hasTranslation { return result.text }
+            modern = result.text
+        } catch {
+            try Task.checkCancellation()
+            modern = nil
+        }
+        // Some songs only have a translation on one of the two QQ endpoints.
+        let endpoint = url("https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg", ["songmid": mid, "g_tk": "5381", "format": "json"])
+        do {
+            let legacy = try object(await fetch(request(endpoint, source: .qq), session: session))
+            try checkCode(legacy, source: .qq)
+            let result = try formatLyrics(legacy, source: .qq, options: options)
+            return result.hasTranslation ? result.text : modern ?? result.text
+        } catch {
+            try Task.checkCancellation()
+            if let modern { return modern }
+            throw error
+        }
     }
 
     static func batchResult(for track: TrackItem, source: LookupSource, options: LyricOptions = LyricOptions(), session: URLSession = .shared) async throws -> BatchLookupResult {
@@ -284,6 +318,10 @@ enum OnlineLookup {
     static func parseLyrics(_ data: Data, source: LookupSource, options: LyricOptions = LyricOptions()) throws -> String {
         let root = try object(data)
         try checkCode(root, source: source)
+        return try formatLyrics(root, source: source, options: options).text
+    }
+
+    private static func formatLyrics(_ root: Object, source: LookupSource, options: LyricOptions) throws -> (text: String, hasTranslation: Bool) {
         let original: String, translation: String
         if source == .qq {
             func decoded(_ value: Any?) -> String {
@@ -297,13 +335,15 @@ enum OnlineLookup {
             translation = string((root["tlyric"] as? Object)?["lyric"]) ?? ""
         }
         let instrumental = "此歌曲为没有填词的纯音乐"
+        let usableTranslation = translation.contains(instrumental) || translation == original ? "" : translation
         let result = LyricFormatter.format(
             original: original.contains(instrumental) ? "" : original,
-            translation: translation.contains(instrumental) || translation == original ? nil : translation,
+            translation: usableTranslation,
             options: options
         )
         guard !result.isEmpty else { throw AppError.message("\(source.name)暂无可用歌词（可能为纯音乐）") }
-        return result
+        let hasTranslation = options.translationEnabled && LyricFormatter.hasContent(usableTranslation)
+        return (result, hasTranslation)
     }
 
     static func fetch(_ url: URL, session: URLSession = .shared) async throws -> Data { try await fetch(request(url, source: nil), session: session) }

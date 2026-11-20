@@ -104,6 +104,7 @@ private final class StubProtocol: URLProtocol {
     @MainActor private static func testBatchLookup(session: URLSession) async throws {
         let cover = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jft8AAAAASUVORK5CYII=")!
         let lyric = "[00:01.00]First song"
+        let translation = "[00:01.00]第一首歌"
         func song(_ id: Int, _ title: String, _ artist: String, _ album: String, _ duration: Int) -> [String: Any] {
             ["id": id, "mid": String(id), "title": title, "singer": artist.components(separatedBy: "/").map { ["name": $0] },
              "album": ["title": album, "mid": "Cover\(id)"], "interval": duration]
@@ -127,11 +128,36 @@ private final class StubProtocol: URLProtocol {
         StubProtocol.handler = { request in
             let url = request.url!
             switch url.host {
-            case "u.y.qq.com": return (200, response)
+            case "u.y.qq.com":
+                let data = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "data" }?.value
+                let root = try OnlineLookup.object(Data((data ?? "").utf8))
+                guard let service = root["req_0"] as? [String: Any],
+                      service["module"] as? String == "music.musichallSong.PlayLyricInfo" else { return (200, response) }
+                let param = service["param"] as? [String: Any]
+                try expect(service["method"] as? String == "GetPlayLyricInfo" && param?["crypt"] as? Int == 0 && param?["qrc"] as? Int == 0, "QQ requests unencrypted LRC")
+                let id = (param?["songMid"] as? String).flatMap(Int.init)
+                let lyrics: [String: Any]
+                switch id {
+                case 3:
+                    lyrics = ["songID": 3, "lyric": Data(lyric.utf8).base64EncodedString(),
+                              "trans": param?["trans"] as? Int == 1 ? Data(translation.utf8).base64EncodedString() : ""]
+                case 5:
+                    return (200, try json(["code": 0, "req_0": ["code": 24001]]))
+                case 6:
+                    lyrics = ["songID": 9, "lyric": lyric]
+                case 12, 13:
+                    lyrics = ["songID": id ?? 0, "lyric": lyric, "trans": "[by:credit]\n[00:01.00]"]
+                default:
+                    throw AppError.message("Unexpected QQ song MID")
+                }
+                let result: [String: Any] = ["code": 0, "data": lyrics]
+                return (200, try json(["code": 0, "req_0": result]))
             case "y.qq.com": return url.path.contains("Cover3") ? (200, cover) : (200, Data("invalid image".utf8))
             case "c.y.qq.com":
                 let mid = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "songmid" }?.value
-                return mid == "3" ? (200, try json(["code": 0, "lyric": lyric])) : (503, Data())
+                if mid == "3" { throw AppError.message("Unexpected legacy lyric request") }
+                if mid == "12" { return (200, try json(["code": 0, "lyric": lyric, "trans": translation])) }
+                return mid == "6" ? (200, try json(["code": 0, "lyric": lyric])) : (503, Data())
             default: throw AppError.message("Batch lookup used an unexpected source")
             }
         }
@@ -152,14 +178,22 @@ private final class StubProtocol: URLProtocol {
         plainOptions.removeTimes = true
         let formatted = try await OnlineLookup.batchResult(for: first, source: .qq, options: plainOptions, session: session)
         let previewed = try await OnlineLookup.lyrics(for: firstResult.song, options: plainOptions, session: session)
-        try expect(formatted.lyrics == "First song" && formatted.lyrics == previewed, "Batch and individual lookup use the same format settings")
-        try expect(firstResult.song.trackId == 3 && firstResult.artwork == cover && firstResult.lyrics == lyric, "Use filename, duration and album to choose the correct recording")
+        try expect(formatted.lyrics == "First song 第一首歌" && formatted.lyrics == previewed, "Batch and individual lookup return QQ translations using the same format settings")
+        try expect(firstResult.song.trackId == 3 && firstResult.artwork == cover && firstResult.lyrics == lyric + " 第一首歌", "Use filename, duration and album to choose the correct recording")
+        plainOptions.translationEnabled = false
+        let original = try await OnlineLookup.lyrics(for: firstResult.song, options: plainOptions, session: session)
+        try expect(original == "First song", "QQ returns the original when translations are off")
+        let legacyTranslation = try await OnlineLookup.lyrics(for: CatalogSong(source: .qq, trackId: 12, songMid: "12"), session: session)
+        try expect(legacyTranslation == lyric + " 第一首歌", "Prefer the legacy endpoint when only it has usable translated lines")
+        let modernOriginal = try await OnlineLookup.lyrics(for: CatalogSong(source: .qq, trackId: 13, songMid: "13"), session: session)
+        try expect(modernOriginal == lyric, "Preserve the modern original if the legacy endpoint fails")
         try expect(secondResult.song.trackId == 5 && secondResult.artwork == nil && secondResult.lyrics == nil, "Keep the tag match when the image or lyrics fail")
 
         let liveTags = AudioTags(title: "我的骄傲", artist: "糖妹;安崎;炎明熹", album: "声生不息 第10期")
         let live = track("我的骄傲.flac", tags: liveTags, duration: 240.026667)
         let liveResult = try await OnlineLookup.batchResult(for: live, source: .qq, session: session)
         try expect(liveResult.song.trackId == 6 && liveResult.song.trackName == "我的骄傲 (Live)", "Use the confirmed live recording and retain the provider title")
+        try expect(liveResult.lyrics == lyric, "Reject modern lyrics for a different song and use the legacy QQ endpoint")
         var missingAlbum = live
         missingAlbum.tags.album = ""
         var missingDuration = live
@@ -197,7 +231,7 @@ private final class StubProtocol: URLProtocol {
         let results = [first.id: firstResult, second.id: secondResult, readOnly.id: secondResult]
         let updated = store.mutateTracks(targetIDs: Set(results.keys)) { id, tags in results[id]?.applying(to: &tags) }
         try expect(updated == 2 && store.dirtyCount == 2, "Batch results apply to their own writable targets")
-        try expect(store.tracks[0].tags.title == "First" && store.tracks[0].tags.lyrics == lyric && store.tracks[0].tags.composer == "Local composer", "Apply the first song's tags and resources together")
+        try expect(store.tracks[0].tags.title == "First" && store.tracks[0].tags.lyrics == lyric + " 第一首歌" && store.tracks[0].tags.composer == "Local composer", "Apply the first song's tags and resources together")
         try expect(store.tracks[1].tags.title == "Second" && store.tracks[1].tags.lyrics == "Local lyrics" && store.tracks[1].tags.artwork == cover, "Preserve the second song's unavailable resources")
         try expect(store.tracks[2] == readOnly, "Leave read-only targets untouched")
         try expect(store.mutateTracks(targetIDs: Set(results.keys)) { id, tags in results[id]?.applying(to: &tags) } == 0, "Retrying identical results produces no undo step")
