@@ -289,6 +289,140 @@ final class MusicTagUITests: XCTestCase {
         XCTAssertFalse(app.buttons["inspector.save"].isEnabled)
     }
 
+    func testLyricSettingsPreviewAndPersistence() throws {
+        try openLyricSettings()
+        try configurePlainOriginalLyrics()
+        try expectLabel("lyricSettings.preview", plainOriginalLyrics)
+
+        app.terminate()
+        app.launch()
+        try openLyricSettings()
+        try expectToggle("lyricSettings.translationEnabled", enabled: false)
+        try expectToggle("lyricSettings.removeTimes", enabled: true)
+        try expectToggle("lyricSettings.removeHeaders", enabled: true)
+        try expectLabel("lyricSettings.preview", plainOriginalLyrics)
+
+        app.buttons["lyricSettings.reset"].click()
+        try expectToggle("lyricSettings.translationEnabled", enabled: true)
+        try expectToggle("lyricSettings.removeTimes", enabled: false)
+        try expectToggle("lyricSettings.removeHeaders", enabled: false)
+    }
+
+    func testOnlineLyricsMatchBatchUndoAndReopen() throws {
+        app.terminate()
+        app.launchEnvironment.removeValue(forKey: "MUSICTAG_UI_TEST_BATCH_LOOKUP_GATE")
+        app.launchEnvironment["MUSICTAG_UI_TEST_LYRICS_FIXTURE"] = "1"
+        app.launch()
+        try openLyricSettings()
+        try configurePlainLyrics()
+        try expectLabel("lyricSettings.preview", bilingualLyrics)
+        let settings = app.windows.containing(.staticText, identifier: "lyricSettings.preview").firstMatch
+        settings.buttons["_XCUI:CloseWindow"].click()
+        try waitUntil("Settings window closes") { !self.app.staticTexts["lyricSettings.preview"].exists }
+
+        let localLyrics = "[00:00.00]Existing local lyric"
+        var tags = try TagEngine.read(from: fixtures.songs[0])
+        tags.lyrics = localLyrics
+        try TagEngine.write(tags, to: fixtures.songs[0])
+        try importFolder()
+        try selectSong(0)
+        app.toolbars.buttons.matching(NSPredicate(format: "label == %@", "搜索标签")).firstMatch.click()
+        let search = app.buttons["搜索"]
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        search.click()
+        let preview = app.buttons["预览歌词"]
+        XCTAssertTrue(preview.waitForExistence(timeout: 5))
+        preview.click()
+        try expectLabel("lookup.lyricPreview", bilingualLyrics)
+        app.buttons["应用歌词"].click()
+        app.buttons["完成"].click()
+        try showLyricsEditor()
+        try expectValue(findLyricsEditor(), bilingualLyrics)
+        XCTAssertEqual(try TagEngine.read(from: fixtures.songs[0]).lyrics, localLyrics)
+        app.buttons["toolbar.undo"].firstMatch.click()
+        try expectValue(findLyricsEditor(), localLyrics)
+
+        XCUIElement.perform(withKeyModifiers: .command) { row(2).click() }
+        try expectLabel("library.selectionCount", "已选 2 首")
+        try fillBatchLyrics()
+        try selectSong(0)
+        try expectValue(findLyricsEditor(), bilingualLyrics)
+        try selectSong(2)
+        try expectValue(findLyricsEditor(), bilingualLyrics)
+        app.buttons["toolbar.undo"].firstMatch.click()
+        try waitUntil("Undo clears both unsaved lyric updates") { !self.app.staticTexts["library.dirtyCount"].exists }
+        try expectValue(findLyricsEditor(), "")
+        try selectSong(0)
+        try expectValue(findLyricsEditor(), localLyrics)
+
+        XCUIElement.perform(withKeyModifiers: .command) { row(2).click() }
+        try fillBatchLyrics()
+        app.toolbars.buttons.matching(identifier: "toolbar.saveAll").firstMatch.click()
+        try expectLabel("library.status", "已保存 2 首音乐")
+        XCTAssertEqual(try TagEngine.read(from: fixtures.songs[0]).lyrics, bilingualLyrics)
+        XCTAssertEqual(try TagEngine.read(from: fixtures.songs[1]).lyrics, "")
+        XCTAssertEqual(try TagEngine.read(from: fixtures.songs[2]).lyrics, bilingualLyrics)
+        try verifyAudio()
+
+        app.terminate()
+        app.launch()
+        try expectLabel("library.count", "3 首音乐")
+        try selectSong(0)
+        try showLyricsEditor()
+        try expectValue(findLyricsEditor(), bilingualLyrics)
+        try selectSong(2)
+        try expectValue(findLyricsEditor(), bilingualLyrics)
+    }
+
+    private let bilingualLyrics = "第一行 First line\n第二行 Second line"
+    private let plainOriginalLyrics = "第一行\n第二行"
+
+    private func openLyricSettings() throws {
+        app.activate()
+        app.typeKey(",", modifierFlags: [.command])
+        XCTAssertTrue(app.staticTexts["lyricSettings.preview"].waitForExistence(timeout: 5))
+    }
+
+    private func configurePlainOriginalLyrics() throws {
+        try expectToggle("lyricSettings.translationEnabled", enabled: true)
+        app.checkBoxes["lyricSettings.translationEnabled"].click()
+        try expectToggle("lyricSettings.translationEnabled", enabled: false)
+        try configurePlainLyrics()
+    }
+
+    private func configurePlainLyrics() throws {
+        for id in ["lyricSettings.removeTimes", "lyricSettings.removeHeaders"] {
+            try expectToggle(id, enabled: false)
+            app.checkBoxes[id].click()
+            try expectToggle(id, enabled: true)
+        }
+    }
+
+    private func expectToggle(_ id: String, enabled: Bool) throws {
+        let toggle = app.checkBoxes[id]
+        try waitUntil("\(id) state is \(enabled)") {
+            guard toggle.exists else { return false }
+            let value = toggle.value
+            return (value as? NSNumber)?.boolValue == enabled || (value as? String) == (enabled ? "1" : "0")
+        }
+    }
+
+    private func showLyricsEditor() throws {
+        let tab = app.radioButtons["歌词"]
+        XCTAssertTrue(tab.waitForExistence(timeout: 5))
+        tab.click()
+        _ = try findLyricsEditor()
+    }
+
+    private func fillBatchLyrics() throws {
+        app.buttons["library.batchLookup"].click()
+        let start = app.buttons["batchLookup.start"]
+        XCTAssertTrue(start.waitForExistence(timeout: 5))
+        start.click()
+        try expectLabel("batchLookup.status", "已匹配 2 首 · 更新 2 首 · 跳过 0 首")
+        app.sheets.buttons["关闭"].click()
+    }
+
     func testRenameContextMenuAndRemovePreservesFiles() throws {
         try importFolder()
         try selectSong(0)

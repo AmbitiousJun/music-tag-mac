@@ -64,7 +64,16 @@ struct LyricResult: Decodable, Identifiable {
     let instrumental: Bool?
     let plainLyrics: String?
     let syncedLyrics: String?
-    var lyrics: String { syncedLyrics.flatMap { $0.isEmpty ? nil : $0 } ?? plainLyrics ?? "" }
+    var lyrics: String { formattedLyrics(options: LyricOptions()) }
+
+    func formattedLyrics(options: LyricOptions) -> String {
+        guard instrumental != true else { return "" }
+        if let syncedLyrics {
+            let formatted = LyricFormatter.format(original: syncedLyrics, translation: nil, options: options)
+            if !formatted.isEmpty { return formatted }
+        }
+        return LyricFormatter.format(original: plainLyrics ?? "", translation: nil, options: options)
+    }
 }
 
 /// Native implementation of MusicTag.exe's QQ / NetEase providers; no Windows runtime.
@@ -109,7 +118,7 @@ enum OnlineLookup {
         try JSONDecoder().decode([LyricResult].self, from: await fetch(request(url("https://lrclib.net/api/search", ["q": query]), source: .lrclib), session: session))
     }
 
-    static func lyrics(for song: CatalogSong, session: URLSession = .shared) async throws -> String {
+    static func lyrics(for song: CatalogSong, options: LyricOptions = LyricOptions(), session: URLSession = .shared) async throws -> String {
         let endpoint: URL
         switch song.source {
         case .qq:
@@ -119,10 +128,10 @@ enum OnlineLookup {
             endpoint = url("https://music.163.com/api/song/lyric", ["os": "pc", "id": String(song.trackId), "lv": "-1", "kv": "-1", "tv": "-1"])
         default: throw AppError.message("请选择 QQ 音乐、网易云音乐或 LRCLIB 查询歌词")
         }
-        return try parseLyrics(await fetch(request(endpoint, source: song.source), session: session), source: song.source)
+        return try parseLyrics(await fetch(request(endpoint, source: song.source), session: session), source: song.source, options: options)
     }
 
-    static func batchResult(for track: TrackItem, source: LookupSource, session: URLSession = .shared) async throws -> BatchLookupResult {
+    static func batchResult(for track: TrackItem, source: LookupSource, options: LyricOptions = LyricOptions(), session: URLSession = .shared) async throws -> BatchLookupResult {
         let filename = track.filenameTags
         let title = track.tags.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let artist = track.tags.artist.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -164,7 +173,7 @@ enum OnlineLookup {
         let detail = (try? await details(song, session: session)) ?? song
         try Task.checkCancellation()
         async let cover = batchArtwork(detail.artworkURL ?? song.artworkURL, format: track.format, session: session)
-        async let lyricText = try? lyrics(for: song, session: session)
+        async let lyricText = try? lyrics(for: song, options: options, session: session)
         let result = await BatchLookupResult(song: detail, artwork: cover, lyrics: lyricText)
         try Task.checkCancellation()
         return result
@@ -272,7 +281,7 @@ enum OnlineLookup {
         }
     }
 
-    static func parseLyrics(_ data: Data, source: LookupSource) throws -> String {
+    static func parseLyrics(_ data: Data, source: LookupSource, options: LyricOptions = LyricOptions()) throws -> String {
         let root = try object(data)
         try checkCode(root, source: source)
         let original: String, translation: String
@@ -287,8 +296,13 @@ enum OnlineLookup {
             original = string((root["lrc"] as? Object)?["lyric"]) ?? ""
             translation = string((root["tlyric"] as? Object)?["lyric"]) ?? ""
         }
-        let result = [original, translation == original ? "" : translation].filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.joined(separator: "\n")
-        guard !result.isEmpty, !result.contains("此歌曲为没有填词的纯音乐") else { throw AppError.message("\(source.name)暂无可用歌词（可能为纯音乐）") }
+        let instrumental = "此歌曲为没有填词的纯音乐"
+        let result = LyricFormatter.format(
+            original: original.contains(instrumental) ? "" : original,
+            translation: translation.contains(instrumental) || translation == original ? nil : translation,
+            options: options
+        )
+        guard !result.isEmpty else { throw AppError.message("\(source.name)暂无可用歌词（可能为纯音乐）") }
         return result
     }
 

@@ -66,18 +66,39 @@ struct TagField: Identifiable {
     @Published var showLookup = false
     @Published var showRename = false
     @Published private var playingTrackID: UUID?
+    @Published var lyricOptions: LyricOptions {
+        didSet {
+            if let data = try? JSONEncoder().encode(lyricOptions) {
+                defaults.set(data, forKey: Self.lyricOptionsKey)
+            }
+        }
+    }
     @Published var sortMode = 0
     private var player: AVAudioPlayer?
     private var undoHistory: [[UUID: AudioTags]] = []
     private var lastEditKey = ""
     private var lastEditTime = Date.distantPast
     private static let lastDirectoryPathsKey = "lastImportedDirectoryPaths"
+    private static let lyricOptionsKey = "lyricOptions"
     private let defaults: UserDefaults
     private var didAttemptDirectoryRestore = false
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        var options = defaults.data(forKey: Self.lyricOptionsKey)
+            .flatMap { try? JSONDecoder().decode(LyricOptions.self, from: $0) } ?? LyricOptions()
+        if defaults.object(forKey: Self.lyricOptionsKey) == nil,
+           defaults.object(forKey: Self.lastDirectoryPathsKey) != nil {
+            // Keep the previous layout for an existing library until the user changes it.
+            options.layout = .sections
+        }
+        lyricOptions = options
         super.init()
+        // Mark first launch before a fresh library can acquire a legacy directory key.
+        if defaults.object(forKey: Self.lyricOptionsKey) == nil,
+           let data = try? JSONEncoder().encode(options) {
+            defaults.set(data, forKey: Self.lyricOptionsKey)
+        }
     }
 
     private static func isExistingDirectory(_ url: URL) -> Bool {

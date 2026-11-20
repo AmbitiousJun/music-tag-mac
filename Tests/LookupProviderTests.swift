@@ -37,10 +37,18 @@ private final class StubProtocol: URLProtocol {
         let lrc = "[00:01.00]晴天 & 你好"
         let encoded = try json(["code": 0, "lyric": Data(lrc.utf8).base64EncodedString(), "trans": Data("[00:01.00]Hello".utf8).base64EncodedString()])
         let decoded = try OnlineLookup.parseLyrics(encoded, source: .qq)
-        try expect(decoded == lrc + "\n[00:01.00]Hello", "QQ Base64")
+        try expect(decoded == lrc + " Hello", "QQ Base64 and default bilingual layout")
+        var options = LyricOptions()
+        options.layout = .sections
+        try expect(try OnlineLookup.parseLyrics(encoded, source: .qq, options: options) == lrc + "\n[00:01.00]Hello", "QQ compatibility layout")
+        options.translationEnabled = false
+        options.removeTimes = true
+        try expect(try OnlineLookup.parseLyrics(encoded, source: .qq, options: options) == "晴天 & 你好", "QQ applies shared cleanup and translation options")
         let wrapped = Data("MusicJsonCallback(\(String(decoding: try json(["code": 0, "lyric": "[00:01.00]A &#38; B &quot;C&quot;"]), as: UTF8.self)));".utf8)
         try expect(try OnlineLookup.parseLyrics(wrapped, source: .qq) == "[00:01.00]A & B \"C\"", "QQ JSONP and entities")
         try expect(try OnlineLookup.parseLyrics(json(["code": 200, "lrc": ["lyric": lrc], "tlyric": ["lyric": "[00:01.00]译文"]]), source: .netease).contains("译文"), "NetEase lyrics")
+        let lrclib = LyricResult(id: 1, trackName: "Lyrics", artistName: "Artist", albumName: nil, duration: nil, instrumental: false, plainLyrics: "Fallback", syncedLyrics: "[ti:Song]\n[00:01.00]")
+        try expect(lrclib.formattedLyrics(options: options) == "Fallback", "LRCLIB uses usable plain lyrics when synced lyrics have no body")
         for (source, value) in [(LookupSource.qq, ["code": 0, "lyric": ""] as [String: Any]), (.netease, ["code": 200, "nolyric": true])] {
             do { _ = try OnlineLookup.parseLyrics(json(value), source: source); throw AppError.message("accepted empty lyric") }
             catch let error as AppError { try expect(error.localizedDescription.contains("暂无"), "empty lyric handling") }
@@ -140,6 +148,11 @@ private final class StubProtocol: URLProtocol {
         let readOnly = track("Read Only.wave", tags: AudioTags())
         let firstResult = try await OnlineLookup.batchResult(for: first, source: .qq, session: session)
         let secondResult = try await OnlineLookup.batchResult(for: second, source: .qq, session: session)
+        var plainOptions = LyricOptions()
+        plainOptions.removeTimes = true
+        let formatted = try await OnlineLookup.batchResult(for: first, source: .qq, options: plainOptions, session: session)
+        let previewed = try await OnlineLookup.lyrics(for: firstResult.song, options: plainOptions, session: session)
+        try expect(formatted.lyrics == "First song" && formatted.lyrics == previewed, "Batch and individual lookup use the same format settings")
         try expect(firstResult.song.trackId == 3 && firstResult.artwork == cover && firstResult.lyrics == lyric, "Use filename, duration and album to choose the correct recording")
         try expect(secondResult.song.trackId == 5 && secondResult.artwork == nil && secondResult.lyrics == nil, "Keep the tag match when the image or lyrics fail")
 
@@ -169,7 +182,16 @@ private final class StubProtocol: URLProtocol {
             }
         }
 
-        let store = LibraryStore()
+        let suiteName = "MusicTag-LookupTests-\(UUID())"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = LibraryStore(defaults: defaults)
+        try expect(store.lyricOptions == LyricOptions(), "Fresh settings use formatter defaults")
+        store.lyricOptions = plainOptions
+        try expect(LibraryStore(defaults: defaults).lyricOptions == plainOptions, "Settings survive reinitialization in the same suite")
+        defaults.removeObject(forKey: "lyricOptions")
+        defaults.set(["/tmp/Old Music Library"], forKey: "lastImportedDirectoryPaths")
+        try expect(LibraryStore(defaults: defaults).lyricOptions.layout == .sections, "An existing library retains the old bilingual layout")
         store.tracks = [first, second, readOnly]
         store.selection = [readOnly.id]
         let results = [first.id: firstResult, second.id: secondResult, readOnly.id: secondResult]
