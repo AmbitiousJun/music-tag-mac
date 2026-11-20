@@ -308,7 +308,7 @@ final class MusicTagUITests: XCTestCase {
         try expectToggle("lyricSettings.removeHeaders", enabled: false)
     }
 
-    func testOnlineLyricsMatchBatchUndoAndReopen() throws {
+    func testQQLyricsKeepTranslationThroughBatchSave() throws {
         app.terminate()
         app.launchEnvironment.removeValue(forKey: "MUSICTAG_UI_TEST_BATCH_LOOKUP_GATE")
         app.launchEnvironment["MUSICTAG_UI_TEST_LYRICS_FIXTURE"] = "1"
@@ -333,11 +333,11 @@ final class MusicTagUITests: XCTestCase {
         let preview = app.buttons["预览歌词"]
         XCTAssertTrue(preview.waitForExistence(timeout: 5))
         preview.click()
-        try expectLabel("lookup.lyricPreview", bilingualLyrics)
+        try expectLabel("lookup.lyricPreview", qqBilingualLyrics)
         app.buttons["应用歌词"].click()
         app.buttons["完成"].click()
         try showLyricsEditor()
-        try expectValue(findLyricsEditor(), bilingualLyrics)
+        try expectValue(findLyricsEditor(), qqBilingualLyrics)
         XCTAssertEqual(try TagEngine.read(from: fixtures.songs[0]).lyrics, localLyrics)
         app.buttons["toolbar.undo"].firstMatch.click()
         try expectValue(findLyricsEditor(), localLyrics)
@@ -346,9 +346,9 @@ final class MusicTagUITests: XCTestCase {
         try expectLabel("library.selectionCount", "已选 2 首")
         try fillBatchLyrics()
         try selectSong(0)
-        try expectValue(findLyricsEditor(), bilingualLyrics)
+        try expectValue(findLyricsEditor(), qqBilingualLyrics)
         try selectSong(2)
-        try expectValue(findLyricsEditor(), bilingualLyrics)
+        try expectValue(findLyricsEditor(), qqBilingualLyrics)
         app.buttons["toolbar.undo"].firstMatch.click()
         try waitUntil("Undo clears both unsaved lyric updates") { !self.app.staticTexts["library.dirtyCount"].exists }
         try expectValue(findLyricsEditor(), "")
@@ -359,9 +359,9 @@ final class MusicTagUITests: XCTestCase {
         try fillBatchLyrics()
         app.toolbars.buttons.matching(identifier: "toolbar.saveAll").firstMatch.click()
         try expectLabel("library.status", "已保存 2 首音乐")
-        XCTAssertEqual(try TagEngine.read(from: fixtures.songs[0]).lyrics, bilingualLyrics)
+        XCTAssertEqual(try TagEngine.read(from: fixtures.songs[0]).lyrics, qqBilingualLyrics)
         XCTAssertEqual(try TagEngine.read(from: fixtures.songs[1]).lyrics, "")
-        XCTAssertEqual(try TagEngine.read(from: fixtures.songs[2]).lyrics, bilingualLyrics)
+        XCTAssertEqual(try TagEngine.read(from: fixtures.songs[2]).lyrics, qqBilingualLyrics)
         try verifyAudio()
 
         app.terminate()
@@ -369,11 +369,12 @@ final class MusicTagUITests: XCTestCase {
         try expectLabel("library.count", "3 首音乐")
         try selectSong(0)
         try showLyricsEditor()
-        try expectValue(findLyricsEditor(), bilingualLyrics)
+        try expectValue(findLyricsEditor(), qqBilingualLyrics)
         try selectSong(2)
-        try expectValue(findLyricsEditor(), bilingualLyrics)
+        try expectValue(findLyricsEditor(), qqBilingualLyrics)
     }
 
+    private let qqBilingualLyrics = "First line 第一行\nSecond line 第二行"
     private let bilingualLyrics = "第一行 First line\n第二行 Second line"
     private let plainOriginalLyrics = "第一行\n第二行"
 
