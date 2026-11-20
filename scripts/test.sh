@@ -17,7 +17,7 @@ for TEST in TagEngine MP4; do
 done
 xcrun swiftc -module-cache-path "$BUILD/cache" \
     "$ROOT/Sources/MusicTag/TagEngine.swift" "$ROOT/Sources/MusicTag/MP4Tags.swift" \
-    "$ROOT/Sources/MusicTag/LibraryStore.swift" "$ROOT/Tests/LibraryStoreTests.swift" -o "$BUILD/LibraryStoreTests"
+    "$ROOT/Sources/MusicTag/LibraryStore.swift" "$ROOT/Sources/MusicTag/LyricFormatter.swift" "$ROOT/Tests/LibraryStoreTests.swift" -o "$BUILD/LibraryStoreTests"
 "$BUILD/TagEngineTests" "$ROOT/analysis/tests" | tee "$ROOT/analysis/tests/tag-engine-results.txt"
 "$BUILD/MP4Tests" "$FFMPEG" "$FFPROBE" | tee "$ROOT/analysis/tests/mp4-results.txt"
 "$BUILD/LibraryStoreTests" "$ROOT/analysis/tests/roundtrip.mp3" | tee "$ROOT/analysis/tests/library-results.txt"

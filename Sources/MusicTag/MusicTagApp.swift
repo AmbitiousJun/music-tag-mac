@@ -63,6 +63,9 @@ import UniformTypeIdentifiers
                 }
             }
         }
+        Settings {
+            LyricSettingsView(options: $store.lyricOptions)
+        }
     }
 }
 

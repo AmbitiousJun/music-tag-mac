@@ -12,6 +12,8 @@
 
 列表右上角的“排序”可按文件名、艺术家或专辑排列。多选歌曲后，点“批量填充…”并选择 QQ 音乐或网易云音乐，即可逐首匹配标签、封面和歌词。匹配使用歌曲的标题和艺术家，缺少标签时尝试从 `艺术家 - 标题` 文件名取值。标题仅相差 `(Live)` 或 `（现场版）` 等后缀时，演唱者、专辑均相同且时长相差不超过 4 秒，才会匹配唯一的候选。匹配不明确的歌曲会跳过，来源缺少的内容会保留本地值。整批可用 `⌘Z` 撤销，确认后再保存。
 
+在 MusicTag 的“设置…”（`⌘,`）调整在线歌词的译文排版、同行分隔符、时间标签、空行、LRC 头部标签和简繁转换，右侧会实时预览。设置会保存，并应用于之后的 QQ 音乐、网易云音乐、LRCLIB 歌词以及批量填充；所选结果的预览与实际应用一致。来源无可用歌词时保留本地歌词。
+
 “音乐”菜单提供歌词导入/导出、简繁转换、文件名填标签和标签生成文件名。重命名模板支持 `{artist}`、`{title}`、`{album}`、`{track}`、`{year}`，例如 `{artist} - {title}`；确认前可以预览。`艺术家 - 标题.mp3` 可通过“文件名 → 标签”快速拆分。
 
 ## 格式
@@ -54,7 +56,10 @@ Sources/MusicTag/
 ├── TagEngine.swift     # 音频标签读取和写入
 ├── MP4Tags.swift       # M4A / MP4 元数据处理
 ├── OnlineLookup.swift # 在线标签和歌词来源
-└── LookupView.swift   # 在线搜索和批量填充界面
+├── LookupView.swift   # 在线搜索和批量填充界面
+├── LyricFormatter.swift # 在线歌词排版、清理与简繁转换
+├── LyricSettingsView.swift # 歌词设置和实时预览
+└── LyricLookupUITestFixture.swift # UI 测试专用在线歌词样本
 Resources/             # 应用信息
 Tests/                 # 标签、业务、原生列表交互、在线来源和图标测试
 ├── Support/            # XCUITest 与人工验收共用的确定性样本、PCM 哈希校验
@@ -117,7 +122,7 @@ bash scripts/prepare-ui-fixtures.sh  # 也可指定一个尚不存在的目录
 也可以通过 `FFMPEG`、`FFPROBE` 环境变量指定工具的绝对路径。在线接口测试单独执行，会向公开服务发送固定的测试关键词 `周杰伦 晴天`、`陈奕迅 十年` 和 `The Beatles Yesterday`：
 
 ```bash
-./scripts/test-lookup.sh  # 离线来源解析、加密向量、错误及兼容接口测试
+./scripts/test-lookup.sh  # 歌词格式化、离线来源解析、加密向量、错误及兼容接口测试
 ./scripts/test-online.sh # 四个来源的真实网络验收
 ```
 

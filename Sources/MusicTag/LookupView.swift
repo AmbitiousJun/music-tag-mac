@@ -1,6 +1,13 @@
 import AppKit
 import SwiftUI
 
+private var lookupSession: URLSession {
+    #if UI_TESTING
+    if let session = LyricLookupUITestFixture.session { return session }
+    #endif
+    return .shared
+}
+
 private struct LyricPreview: Identifiable {
     let id: String
     let title: String
@@ -21,6 +28,10 @@ struct LookupView: View {
     @State private var task: Task<Void, Never>?
     @State private var operationID = UUID()
     @State private var targetIDs = Set<UUID>()
+    private var selectedLyricText: String? {
+        selectedLyric?.formattedLyrics(options: store.lyricOptions)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
@@ -79,9 +90,9 @@ struct LookupView: View {
                             Label(lyric.syncedLyrics == nil ? "纯文本歌词" : "同步歌词 LRC", systemImage: "text.alignleft").font(.system(size: 10)).foregroundStyle(.secondary)
                         }.padding(.vertical, 5).tag(lyric.id)
                     }.frame(minWidth: 200, idealWidth: 240)
-                    ScrollView { Text(selectedLyric?.lyrics ?? "选择一个结果预览歌词").font(.system(size: 12, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(12) }.frame(minWidth: 290)
+                    ScrollView { Text(selectedLyricText.map { $0.isEmpty ? "当前设置下没有可用歌词" : $0 } ?? "选择一个结果预览歌词").font(.system(size: 12, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(12) }.frame(minWidth: 290)
                 }
-                HStack { Spacer(); Button("应用所选歌词") { if let lyric = selectedLyric { applyLyrics(lyric.lyrics) } }.buttonStyle(.borderedProminent).disabled(pending || selectedLyric == nil || selectedLyric?.lyrics.isEmpty == true) }
+                HStack { Spacer(); Button("应用所选歌词") { if let text = selectedLyricText { applyLyrics(text) } }.buttonStyle(.borderedProminent).disabled(pending || selectedLyricText?.isEmpty != false) }
             }
             Spacer(minLength: 0)
             HStack {
@@ -100,7 +111,7 @@ struct LookupView: View {
         .sheet(item: $preview) { item in
             VStack(alignment: .leading, spacing: 14) {
                 Text(item.title).font(.headline)
-                ScrollView { Text(item.text).font(.system(size: 12, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(12) }
+                ScrollView { Text(item.text).accessibilityIdentifier("lookup.lyricPreview").font(.system(size: 12, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(12) }
                 HStack { Text("应用后仍需保存写入音乐文件").font(.caption).foregroundStyle(.secondary); Spacer(); Button("取消") { preview = nil }.keyboardShortcut(.cancelAction); Button("应用歌词") { applyLyrics(item.text); preview = nil }.buttonStyle(.borderedProminent) }
             }.padding(24).frame(width: 620, height: 500)
         }
@@ -124,11 +135,11 @@ struct LookupView: View {
         songs = []; lyrics = []; selectedLyric = nil
         run("正在搜索 \(selectedSource.name)…") { id in
             if selectedSource == .lrclib {
-                let results = try await OnlineLookup.lyrics(query: text)
+                let results = try await OnlineLookup.lyrics(query: text, session: lookupSession)
                 guard isCurrent(id) else { return }
                 lyrics = results; message = results.isEmpty ? "没有找到歌词，可以调整关键词" : "找到 \(results.count) 份歌词"
             } else {
-                let results = try await OnlineLookup.songs(query: text, country: selectedCountry, source: selectedSource)
+                let results = try await OnlineLookup.songs(query: text, country: selectedCountry, source: selectedSource, session: lookupSession)
                 guard isCurrent(id) else { return }
                 songs = results; message = results.isEmpty ? "没有找到结果，可以调整关键词或来源" : "\(selectedSource.name)找到 \(results.count) 个结果；请核对后应用"
             }
@@ -136,7 +147,7 @@ struct LookupView: View {
     }
     private func applySong(_ song: CatalogSong) {
         run("正在读取 \(song.source.name)歌曲详情…") { id in
-            let detail = try await OnlineLookup.details(song)
+            let detail = try await OnlineLookup.details(song, session: lookupSession)
             guard isCurrent(id) else { return }
             store.mutate(targetIDs: targetIDs) { detail.applying(to: &$0) }
             message = "已应用“\(detail.trackName ?? "")”的标签，关闭窗口后保存以写入文件"
@@ -144,17 +155,18 @@ struct LookupView: View {
     }
     private func applyArtwork(_ song: CatalogSong) {
         run("正在下载 \(song.source.name)封面…") { id in
-            let detail = song.artworkURL == nil ? try await OnlineLookup.details(song) : song
+            let detail = song.artworkURL == nil ? try await OnlineLookup.details(song, session: lookupSession) : song
             guard let url = detail.artworkURL else { throw AppError.message("这首歌暂无可用封面") }
-            let data = try await OnlineLookup.fetch(url)
+            let data = try await OnlineLookup.fetch(url, session: lookupSession)
             guard NSImage(data: data) != nil else { throw AppError.message("来源返回了无效图片") }
             guard isCurrent(id) else { return }
             store.mutate(targetIDs: targetIDs) { $0.artwork = data }; message = "已应用封面，关闭窗口后保存以写入文件"
         }
     }
     private func previewLyrics(_ song: CatalogSong) {
+        let options = store.lyricOptions
         run("正在读取 \(song.source.name)歌词…") { id in
-            let text = try await OnlineLookup.lyrics(for: song)
+            let text = try await OnlineLookup.lyrics(for: song, options: options, session: lookupSession)
             guard isCurrent(id) else { return }
             preview = LyricPreview(id: song.id, title: "\(song.trackName ?? "") · \(song.source.name)", text: text)
             message = "已获取歌词，请预览后应用"
@@ -266,6 +278,7 @@ struct BatchLookupView: View {
         issues = []
         currentTitle = selection.tracks.first?.title ?? ""
         let lookupSource = source
+        let options = store.lyricOptions
         store.busy = true
         task = Task { @MainActor in
             var results: [UUID: BatchLookupResult] = [:]
@@ -274,7 +287,7 @@ struct BatchLookupView: View {
                 currentTitle = track.title
                 if track.writable {
                     do {
-                        let result = try await lookup(track, source: lookupSource)
+                        let result = try await lookup(track, source: lookupSource, options: options)
                         guard !Task.isCancelled else { return }
                         results[track.id] = result
                         let missing = [result.artwork == nil ? "封面" : nil, result.lyrics == nil ? "歌词" : nil].compactMap { $0 }
@@ -298,7 +311,7 @@ struct BatchLookupView: View {
         }
     }
 
-    private func lookup(_ track: TrackItem, source: LookupSource) async throws -> BatchLookupResult {
+    private func lookup(_ track: TrackItem, source: LookupSource, options: LyricOptions) async throws -> BatchLookupResult {
         #if UI_TESTING
         if let gate = ProcessInfo.processInfo.environment["MUSICTAG_UI_TEST_BATCH_LOOKUP_GATE"] {
             // Keep the real sheet in its running state until the UI test releases the fixture.
@@ -309,7 +322,7 @@ struct BatchLookupView: View {
             throw AppError.message("没有可靠匹配")
         }
         #endif
-        return try await OnlineLookup.batchResult(for: track, source: source)
+        return try await OnlineLookup.batchResult(for: track, source: source, options: options, session: lookupSession)
     }
 
     private func cancel() {
