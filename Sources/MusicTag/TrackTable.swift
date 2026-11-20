@@ -130,7 +130,7 @@ struct TrackTable: NSViewRepresentable {
         func makeMenu() -> NSMenu {
             let menu = NSMenu()
             for (title, action) in [
-                ("保存标签", #selector(save)), ("试听 / 暂停", #selector(play)),
+                ("保存标签", #selector(save)), (store.playbackActionTitle, #selector(play)),
                 ("在访达中显示", #selector(reveal)), ("", nil),
                 ("文件名 → 标签", #selector(tagsFromFilename)), ("标签 → 文件名…", #selector(rename)),
                 ("从列表移除", #selector(remove))
@@ -144,7 +144,11 @@ struct TrackTable: NSViewRepresentable {
         }
 
         func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-            !store.selection.isEmpty && (!store.busy || menuItem.action == #selector(play) || menuItem.action == #selector(reveal))
+            if menuItem.action == #selector(play) {
+                menuItem.title = store.playbackActionTitle
+                return store.first != nil
+            }
+            return !store.selection.isEmpty && (!store.busy || menuItem.action == #selector(reveal))
         }
 
         @objc private func save() { store.save() }

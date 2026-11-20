@@ -47,7 +47,7 @@ import UniformTypeIdentifiers
             }
             CommandMenu("音乐") {
                 Group {
-                    Button("试听 / 暂停") { store.togglePlayback() }.keyboardShortcut(" ", modifiers: [.command]).disabled(store.first == nil)
+                    Button(store.playbackActionTitle) { store.togglePlayback() }.keyboardShortcut(" ", modifiers: [.command]).disabled(store.first == nil)
                     Button("在访达中显示") { store.reveal() }.keyboardShortcut("r", modifiers: [.command, .shift]).disabled(store.first == nil)
                     Divider()
                     Button("搜索标签与歌词…") { store.showLookup = true }.keyboardShortcut("f", modifiers: [.command, .shift]).disabled(store.selection.isEmpty)
@@ -96,7 +96,9 @@ struct MainView: View {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button { store.undo() } label: { Label("撤销", systemImage: "arrow.uturn.backward") }.disabled(!store.canUndo || store.busy).accessibilityIdentifier("toolbar.undo")
                 Button { store.showLookup = true } label: { Label("搜索标签", systemImage: "sparkle.magnifyingglass") }.disabled(store.selection.isEmpty || store.busy)
-                Button { store.togglePlayback() } label: { Label("试听", systemImage: store.isPlaying ? "pause.fill" : "play.fill") }.disabled(store.first == nil).accessibilityIdentifier("toolbar.play").accessibilityValue(store.isPlaying ? "正在播放" : "已暂停")
+                Button { store.togglePlayback() } label: {
+                    Label(store.playbackActionTitle, systemImage: store.isSelectionPlaying ? "stop.fill" : "play.fill")
+                }.disabled(store.first == nil).accessibilityIdentifier("toolbar.play")
                 Divider()
                 Button { store.save(all: true) } label: { Label("保存修改", systemImage: "square.and.arrow.down") }.disabled(store.dirtyCount == 0 || store.busy).help("保存全部修改 · ⇧⌘S").accessibilityIdentifier("toolbar.saveAll")
             }

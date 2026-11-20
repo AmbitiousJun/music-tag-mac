@@ -65,10 +65,9 @@ struct TagField: Identifiable {
     @Published var alert: String?
     @Published var showLookup = false
     @Published var showRename = false
-    @Published var isPlaying = false
+    @Published private var playingTrackID: UUID?
     @Published var sortMode = 0
     private var player: AVAudioPlayer?
-    private var playerID: UUID?
     private var undoHistory: [[UUID: AudioTags]] = []
     private var lastEditKey = ""
     private var lastEditTime = Date.distantPast
@@ -99,6 +98,8 @@ struct TagField: Identifiable {
 
     var selected: [TrackItem] { tracks.filter { selection.contains($0.id) } }
     var first: TrackItem? { selected.first }
+    var isSelectionPlaying: Bool { playingTrackID.map { $0 == first?.id } ?? false }
+    var playbackActionTitle: String { isSelectionPlaying ? "停止试听" : "播放试听" }
     var dirtyCount: Int { tracks.filter(\.isDirty).count }
     var hasWritableSelection: Bool { selected.contains(where: \.writable) }
     var canUndo: Bool { !undoHistory.isEmpty }
@@ -268,21 +269,34 @@ struct TagField: Identifiable {
     func removeSelected() {
         guard !busy else { return }
         if selected.contains(where: \.isDirty) && !confirm("移除选中的音乐？", detail: "选中音乐的未保存修改将被丢弃。音乐文件保留在原位置。") { return }
-        if let id = playerID, selection.contains(id) { player?.stop(); isPlaying = false; playerID = nil }
+        if let id = playingTrackID, selection.contains(id) { stopPlayback() }
         tracks.removeAll { selection.contains($0.id) }
         selection.removeAll()
     }
     func reveal() { if let first = first { NSWorkspace.shared.activateFileViewerSelecting([first.url]) } }
     func togglePlayback() {
-        guard let first = first else { return }
+        guard let track = first else { return }
+        let shouldStop = playingTrackID == track.id
+        stopPlayback()
+        guard !shouldStop else { return }
         do {
-            if playerID != first.id { player?.stop(); player = try AVAudioPlayer(contentsOf: first.url); player?.delegate = self; playerID = first.id }
-            if player?.isPlaying == true { player?.pause(); isPlaying = false }
-            else { isPlaying = player?.play() == true }
+            let player = try AVAudioPlayer(contentsOf: track.url)
+            player.delegate = self
+            guard player.play() else { return }
+            self.player = player
+            playingTrackID = track.id
         } catch { alert = "系统无法试听此格式：\(error.localizedDescription)" }
     }
+    private func stopPlayback() {
+        guard let player else { return }
+        player.stop()
+        self.player = nil
+        playingTrackID = nil
+    }
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        Task { @MainActor in if self.player === player { self.isPlaying = false } }
+        Task { @MainActor in
+            if self.player === player { self.stopPlayback() }
+        }
     }
     func chooseArtwork() {
         let panel = NSOpenPanel(); panel.allowedContentTypes = [.jpeg, .png, .tiff, .heic]; panel.allowsMultipleSelection = false

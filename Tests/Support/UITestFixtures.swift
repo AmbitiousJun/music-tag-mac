@@ -80,8 +80,9 @@ struct UITestFixtures {
 
     private static func wave(seed: Int) -> Data {
         var pcm = Data()
-        // Three seconds of non-silent, deterministic 16-bit mono PCM at 8 kHz.
-        for index in 0..<24_000 {
+        // Allow time for several UI actions during playback. Use deterministic
+        // 16-bit mono PCM at 8 kHz.
+        for index in 0..<160_000 {
             pcm.append(little(UInt32(UInt16(bitPattern: Int16(((index * seed * 37) % 12_000) - 6_000))), count: 2))
         }
         var data = Data("RIFF".utf8)
