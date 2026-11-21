@@ -57,11 +57,7 @@ enum LyricLookupUITestFixture {
             guard let directory = ProcessInfo.processInfo.environment["MUSICTAG_UI_TEST_LOOKUP_REQUESTS"] else { return }
             let source: String
             switch (url.host, url.path) {
-            case ("u.y.qq.com", "/cgi-bin/musicu.fcg"):
-                let raw = url.queryItems?.first { $0.name == "data" }?.value ?? ""
-                guard let request = try? JSONDecoder().decode(MusicuRequest.self, from: Data(raw.utf8)),
-                      request.req_0.method == "DoSearchForQQMusicDesktop" else { return }
-                source = "qq"
+            case ("c.y.qq.com", "/soso/fcgi-bin/search_for_qq_cp"): source = "qq"
             case ("music.163.com", "/weapi/cloudsearch/pc"): source = "netease"
             case ("songsearch.kugou.com", "/song_search_v2"): source = "kugou"
             case ("itunes.apple.com", "/search"): source = "itunes"
@@ -86,47 +82,50 @@ enum LyricLookupUITestFixture {
             case ("u.y.qq.com", "/cgi-bin/musicu.fcg"):
                 let raw = params.first { $0.name == "data" }?.value ?? ""
                 let body = try JSONDecoder().decode(MusicuRequest.self, from: Data(raw.utf8))
-                if body.req_0.method == "GetPlayLyricInfo" {
-                    guard body.req_0.module == "music.musichallSong.PlayLyricInfo",
-                          body.req_0.param.type == 1, body.req_0.param.trans == 1, body.req_0.param.crypt == 0,
-                          body.req_0.param.qrc == 0, let mid = body.req_0.param.songMid,
-                          let songIndex = songMids.firstIndex(of: mid) else {
-                        throw URLError(.resourceUnavailable)
-                    }
-                    let original = "[ti:测试歌]\n[00:01.2]First line\n[00:02.30]Second line"
-                    let translation = "[00:01.20]第一行\n[00:02.300]第二行"
-                    let lyrics: [String: Any] = [
-                        "songID": songIndex + 1,
-                        "lyric": Data(original.utf8).base64EncodedString(),
-                        "trans": Data(translation.utf8).base64EncodedString()
-                    ]
-                    let response: [String: Any] = ["code": 0, "data": lyrics]
-                    return ["code": 0, "req_0": response]
+                guard body.req_0.method == "GetPlayLyricInfo",
+                      body.req_0.module == "music.musichallSong.PlayLyricInfo",
+                      body.req_0.param.type == 1, body.req_0.param.trans == 1, body.req_0.param.crypt == 0,
+                      body.req_0.param.qrc == 0, let mid = body.req_0.param.songMid,
+                      let songIndex = songMids.firstIndex(of: mid) else {
+                    throw URLError(.resourceUnavailable)
                 }
-                if body.req_0.param.query == "Aggregate Fixture" {
-                    let row: [String: Any] = ["id": 1, "mid": "fixture-1", "name": "Fixture Loose Match",
-                        "singer": [["name": "Other Artist"]], "album": ["name": "Other Album"]]
-                    return ["code": 0, "req_0": ["data": ["body": ["song": ["list": [row]]]]]]
-                }
-                if body.req_0.param.query == "Apply All Fixture" {
-                    let rows: [[String: Any]] = [[
-                        "id": 4, "mid": "fixture-apply-all", "name": "Online Title",
+                let original = "[ti:测试歌]\n[00:01.2]First line\n[00:02.30]Second line"
+                let translation = "[00:01.20]第一行\n[00:02.300]第二行"
+                let lyrics: [String: Any] = [
+                    "songID": songIndex + 1,
+                    "lyric": Data(original.utf8).base64EncodedString(),
+                    "trans": Data(translation.utf8).base64EncodedString()
+                ]
+                let response: [String: Any] = ["code": 0, "data": lyrics]
+                return ["code": 0, "req_0": response]
+            case ("c.y.qq.com", "/soso/fcgi-bin/search_for_qq_cp"):
+                let query = params.first { $0.name == "w" }?.value ?? ""
+                let rows: [[String: Any]]
+                switch query {
+                case "Aggregate Fixture":
+                    rows = [[
+                        "songid": 1, "songmid": "fixture-1", "songname": "Fixture Loose Match",
+                        "singer": [["name": "Other Artist"]], "albumname": "Other Album"
+                    ]]
+                case "Apply All Fixture":
+                    rows = [[
+                        "songid": 4, "songmid": "fixture-apply-all", "songname": "Online Title",
                         "singer": [["name": "Online Artist"]],
-                        "album": ["name": "Online Album", "mid": "fixture-apply-all"]
+                        "albumname": "Online Album", "albummid": "fixture-apply-all"
                     ]]
-                    return ["code": 0, "req_0": ["data": ["body": ["song": ["list": rows]]]]]
+                default:
+                    let song = ["First Song", "Second Song", "Third Song"].enumerated()
+                        .first { query == "Artist \($0.offset + 1) \($0.element)" }
+                    rows = song.map { match in
+                        let number = match.offset + 1
+                        return [[
+                            "songid": number, "songmid": "fixture-\(number)", "songname": match.element,
+                            "singer": [["name": "Artist \(number)"]],
+                            "albumname": "Original Album \(number)", "interval": 20
+                        ]]
+                    } ?? []
                 }
-                let song = ["First Song", "Second Song", "Third Song"].enumerated()
-                    .first { body.req_0.param.query == "Artist \($0.offset + 1) \($0.element)" }
-                let rows: [[String: Any]] = song.map { match in
-                    let number = match.offset + 1
-                    return [[
-                        "id": number, "mid": "fixture-\(number)", "name": match.element,
-                        "singer": [["name": "Artist \(number)"]],
-                        "album": ["name": "Original Album \(number)"], "interval": 20
-                    ]]
-                } ?? []
-                return ["code": 0, "req_0": ["data": ["body": ["song": ["list": rows]]]]]
+                return ["code": 0, "data": ["song": ["list": rows]]]
             case ("songsearch.kugou.com", "/song_search_v2"):
                 let query = params.first { $0.name == "keyword" }?.value ?? ""
                 if query == "Aggregate Fixture" {
@@ -184,7 +183,6 @@ enum LyricLookupUITestFixture {
 
         private struct MusicuRequest: Decodable {
             struct Arguments: Decodable {
-                let query: String?
                 let songMid: String?
                 let type: Int?
                 let trans: Int?
