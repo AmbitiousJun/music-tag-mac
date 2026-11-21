@@ -92,11 +92,14 @@ struct LookupView: View {
                                 .controlSize(.small)
                                 .fixedSize()
                                 .disabled(pending || store.busy)
-                            }.padding(.vertical, 12)
+                            }
+                            .padding(.vertical, 12)
+                            .padding(.trailing, 20)
                             Divider()
                         }
                     }
                 }
+                .accessibilityIdentifier("lookup.results")
             } else {
                 HSplitView {
                     List(lyrics, selection: Binding<Int?>(get: { selectedLyric?.id }, set: { id in selectedLyric = lyrics.first { $0.id == id } })) { lyric in

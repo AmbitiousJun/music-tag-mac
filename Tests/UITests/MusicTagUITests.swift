@@ -353,6 +353,15 @@ final class MusicTagUITests: XCTestCase {
         search.click()
         let actions = app.descendants(matching: .any).matching(identifier: "lookup.actions").firstMatch
         XCTAssertTrue(actions.waitForExistence(timeout: 5))
+        let results = app.scrollViews["lookup.results"]
+        XCTAssertTrue(results.exists)
+        let trailingInset = results.frame.maxX - actions.frame.maxX
+        let resultScreenshot = XCTAttachment(screenshot: results.screenshot())
+        resultScreenshot.name = "Search result menu inset (\(trailingInset) pt)"
+        resultScreenshot.lifetime = .keepAlways
+        add(resultScreenshot)
+        XCTAssertGreaterThanOrEqual(trailingInset, 12,
+                                    "The result menu should stay clear of the vertical scrollbar")
         actions.click()
         let preview = app.menuItems["预览歌词"]
         XCTAssertTrue(preview.waitForExistence(timeout: 5))
