@@ -57,7 +57,7 @@ struct LookupView: View {
                 Button("搜索") { search() }.buttonStyle(.borderedProminent).disabled(pending || query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 if pending { Button("取消") { cancel(); message = "已取消" } }
             }
-            HStack(spacing: 8) { if pending { ProgressView().controlSize(.small) }; Text(message).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+            HStack(spacing: 8) { if pending { ProgressView().controlSize(.small) }; Text(message).font(.caption).foregroundStyle(.secondary).lineLimit(2).accessibilityIdentifier("lookup.status") }
             Divider()
             if source != .lrclib {
                 ScrollView {
@@ -66,16 +66,32 @@ struct LookupView: View {
                             HStack(spacing: 14) {
                                 AsyncImage(url: song.artworkURL) { image in image.resizable().aspectRatio(contentMode: .fit) } placeholder: { Image(systemName: "music.note").font(.title2).foregroundStyle(.tertiary) }.frame(width: 56, height: 56).background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 5))
                                 VStack(alignment: .leading, spacing: 5) {
-                                    Text(song.trackName ?? "未知标题").fontWeight(.medium)
-                                    Text("\(song.artistName ?? "") · \(song.collectionName ?? "")").font(.caption).foregroundStyle(.secondary)
+                                    Text(song.trackName ?? "未知标题").fontWeight(.medium).lineLimit(1)
+                                    Text("\(song.artistName ?? "") · \(song.collectionName ?? "")").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                                     Text([song.releaseDate.map { String($0.prefix(4)) }, song.primaryGenreName, song.trackNumber.map { "音轨 \($0)" }].compactMap { $0 }.joined(separator: " · ")).font(.system(size: 10)).foregroundStyle(.secondary)
                                 }
                                 Spacer(minLength: 10)
-                                VStack(spacing: 7) {
-                                    Button("应用标签") { applySong(song) }.disabled(pending)
-                                    Button("应用封面") { applyArtwork(song) }.disabled(pending || (song.artworkURL == nil && song.source != .netease))
-                                    if song.source == .qq || song.source == .netease { Button("预览歌词") { previewLyrics(song) }.disabled(pending) }
-                                }.controlSize(.small)
+                                HStack(spacing: 2) {
+                                    Button("一键应用") { applyAll(song) }
+                                        .accessibilityIdentifier("lookup.applyAll")
+                                    Menu {
+                                        Button("应用标签") { applySong(song) }.accessibilityIdentifier("lookup.applyTags")
+                                        Button("应用封面") { applyArtwork(song) }
+                                            .disabled(song.artworkURL == nil && song.source != .netease)
+                                            .accessibilityIdentifier("lookup.applyArtwork")
+                                        if song.source == .qq || song.source == .netease {
+                                            Button("预览歌词") { previewLyrics(song) }.accessibilityIdentifier("lookup.previewLyrics")
+                                        }
+                                    } label: {
+                                        Label("单项操作", systemImage: "chevron.down").labelStyle(.iconOnly)
+                                    }
+                                    .menuIndicator(.hidden)
+                                    .accessibilityLabel("单项操作")
+                                    .accessibilityIdentifier("lookup.actions")
+                                }
+                                .controlSize(.small)
+                                .fixedSize()
+                                .disabled(pending || store.busy)
                             }.padding(.vertical, 12)
                             Divider()
                         }
@@ -151,6 +167,25 @@ struct LookupView: View {
             guard isCurrent(id) else { return }
             store.mutate(targetIDs: targetIDs) { detail.applying(to: &$0) }
             message = "已应用“\(detail.trackName ?? "")”的标签，关闭窗口后保存以写入文件"
+        }
+    }
+    private func applyAll(_ song: CatalogSong) {
+        guard !pending, !store.busy else { return }
+        let options = store.lyricOptions
+        run("正在获取 \(song.source.name)的可用内容…") { id in
+            let result = try await OnlineLookup.catalogResult(for: song, options: options, session: lookupSession)
+            guard isCurrent(id), store.showLookup, source == song.source else { return }
+            let targets = store.tracks.filter { targetIDs.contains($0.id) && $0.writable }
+            let formats = Dictionary(uniqueKeysWithValues: targets.map { ($0.id, $0.format) })
+            let updated = store.mutateTracks(targetIDs: targetIDs) { trackID, tags in
+                result.applying(to: &tags, fallback: song, format: formats[trackID])
+            }
+            let artworkUnavailable = result.artwork.map { artwork in
+                formats.values.contains { !OnlineLookup.canApplyArtwork(artwork, format: $0) }
+            } ?? true
+            let missing = [artworkUnavailable ? "封面" : nil, song.source != .itunes && result.lyrics == nil ? "歌词" : nil].compactMap { $0 }
+            message = updated == 0 ? "没有音乐需要更新" : "已更新 \(updated) 首音乐，关闭窗口后保存以写入文件"
+            if !missing.isEmpty { message += "；未获取\(missing.joined(separator: "、"))" }
         }
     }
     private func applyArtwork(_ song: CatalogSong) {

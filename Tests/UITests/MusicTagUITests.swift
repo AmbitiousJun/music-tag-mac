@@ -351,7 +351,10 @@ final class MusicTagUITests: XCTestCase {
         let search = app.buttons["搜索"]
         XCTAssertTrue(search.waitForExistence(timeout: 5))
         search.click()
-        let preview = app.buttons["预览歌词"]
+        let actions = app.descendants(matching: .any).matching(identifier: "lookup.actions").firstMatch
+        XCTAssertTrue(actions.waitForExistence(timeout: 5))
+        actions.click()
+        let preview = app.menuItems["预览歌词"]
         XCTAssertTrue(preview.waitForExistence(timeout: 5))
         preview.click()
         try expectLabel("lookup.lyricPreview", qqBilingualLyrics)
@@ -393,6 +396,70 @@ final class MusicTagUITests: XCTestCase {
         try expectValue(findLyricsEditor(), qqBilingualLyrics)
         try selectSong(2)
         try expectValue(findLyricsEditor(), qqBilingualLyrics)
+    }
+
+    func testLookupAppliesAllAvailableMetadataWithOneUndo() throws {
+        app.terminate()
+        app.launchEnvironment["MUSICTAG_UI_TEST_LYRICS_FIXTURE"] = "1"
+        app.launch()
+        try openLyricSettings()
+        try configurePlainLyrics()
+        let settings = app.windows.containing(.staticText, identifier: "lyricSettings.preview").firstMatch
+        settings.buttons["_XCUI:CloseWindow"].click()
+        try waitUntil("Settings window closes") { !self.app.staticTexts["lyricSettings.preview"].exists }
+
+        let song = fixtures.songs[0]
+        var local = try TagEngine.read(from: song)
+        local.lyrics = "[00:00.00]Existing local lyric"
+        local.artwork = try Data(contentsOf: fixtures.cover)
+        try TagEngine.write(local, to: song)
+        let original = try TagEngine.read(from: song)
+        try importFolder()
+        try selectSong(0)
+
+        try applyAllFromLookupFixture()
+        try expectValue(app.textFields["tag.标题"], "Online Title")
+        try expectValue(app.textFields["tag.艺术家"], "Online Artist")
+        try expectValue(app.textFields["tag.专辑"], "Online Album")
+        try expectLabel("24 × 18", "24 × 18")
+        try showLyricsEditor()
+        try expectValue(findLyricsEditor(), qqBilingualLyrics)
+        XCTAssertEqual(try TagEngine.read(from: song), original)
+
+        app.buttons["toolbar.undo"].firstMatch.click()
+        try expectValue(findLyricsEditor(), local.lyrics)
+        try expectLabel("32 × 32", "32 × 32")
+        app.radioButtons["标签"].click()
+        try expectValue(app.textFields["tag.标题"], local.title)
+        try expectValue(app.textFields["tag.艺术家"], local.artist)
+        try expectValue(app.textFields["tag.专辑"], local.album)
+        try waitUntil("One undo clears all unsaved changes") { !self.app.staticTexts["library.dirtyCount"].exists }
+
+        try applyAllFromLookupFixture()
+        app.buttons["inspector.save"].click()
+        try expectLabel("library.status", "已保存 1 首音乐")
+        let saved = try TagEngine.read(from: song)
+        XCTAssertEqual(saved.title, "Online Title")
+        XCTAssertEqual(saved.artist, "Online Artist")
+        XCTAssertEqual(saved.album, "Online Album")
+        XCTAssertEqual(saved.lyrics, qqBilingualLyrics)
+        let artwork = try XCTUnwrap(saved.artwork)
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: artwork))
+        XCTAssertEqual(bitmap.pixelsWide, 24)
+        XCTAssertEqual(bitmap.pixelsHigh, 18)
+        try verifyAudio()
+    }
+
+    private func applyAllFromLookupFixture() throws {
+        app.toolbars.buttons.matching(NSPredicate(format: "label == %@", "搜索标签")).firstMatch.click()
+        let query = app.textFields["标题 / 艺术家 / 专辑"]
+        try replace(query, with: "Apply All Fixture", tabToCommit: false)
+        app.buttons["搜索"].click()
+        let apply = app.buttons["lookup.applyAll"]
+        XCTAssertTrue(apply.waitForExistence(timeout: 5))
+        apply.click()
+        try expectLabel("lookup.status", "已更新 1 首音乐，关闭窗口后保存以写入文件")
+        app.buttons["完成"].click()
     }
 
     private let qqBilingualLyrics = "First line 第一行\nSecond line 第二行"

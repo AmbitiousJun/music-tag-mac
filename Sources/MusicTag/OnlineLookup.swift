@@ -48,9 +48,10 @@ struct BatchLookupResult {
     let artwork: Data?
     let lyrics: String?
 
-    func applying(to tags: inout AudioTags) {
+    func applying(to tags: inout AudioTags, fallback: CatalogSong? = nil, format: String? = nil) {
+        fallback?.applying(to: &tags)
         song.applying(to: &tags)
-        if let artwork { tags.artwork = artwork }
+        if let artwork, OnlineLookup.canApplyArtwork(artwork, format: format) { tags.artwork = artwork }
         if let lyrics { tags.lyrics = lyrics }
     }
 }
@@ -204,18 +205,33 @@ enum OnlineLookup {
             throw AppError.message(candidates.isEmpty ? "没有可靠匹配" : "找到多个匹配版本")
         }
 
+        return try await catalogResult(for: song, format: track.format, options: options, session: session)
+    }
+
+    static func catalogResult(for song: CatalogSong, format: String? = nil, options: LyricOptions, session: URLSession) async throws -> BatchLookupResult {
         let detail = (try? await details(song, session: session)) ?? song
         try Task.checkCancellation()
-        async let cover = batchArtwork(detail.artworkURL ?? song.artworkURL, format: track.format, session: session)
-        async let lyricText = try? lyrics(for: song, options: options, session: session)
+        async let cover = catalogArtwork(detail.artworkURL ?? song.artworkURL, format: format, session: session)
+        async let lyricText = catalogLyrics(song, options: options, session: session)
         let result = await BatchLookupResult(song: detail, artwork: cover, lyrics: lyricText)
         try Task.checkCancellation()
         return result
     }
 
-    private static func batchArtwork(_ url: URL?, format: String, session: URLSession) async -> Data? {
+    private static func catalogLyrics(_ song: CatalogSong, options: LyricOptions, session: URLSession) async -> String? {
+        guard song.source == .qq || song.source == .netease,
+              let text = try? await lyrics(for: song, options: options, session: session),
+              !text.isEmpty else { return nil }
+        return text
+    }
+
+    static func canApplyArtwork(_ data: Data, format: String?) -> Bool {
+        format != "FLAC" || data.count <= 0xffffff - 128
+    }
+
+    private static func catalogArtwork(_ url: URL?, format: String?, session: URLSession) async -> Data? {
         guard let url, let data = try? await fetch(url, session: session),
-              format != "FLAC" || data.count <= 0xffffff - 128,
+              canApplyArtwork(data, format: format),
               let image = CGImageSourceCreateWithData(data as CFData, nil),
               CGImageSourceGetCount(image) > 0 else { return nil }
         return data
