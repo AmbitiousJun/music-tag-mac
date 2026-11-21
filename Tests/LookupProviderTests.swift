@@ -54,6 +54,7 @@ private final class StubProtocol: URLProtocol {
             catch let error as AppError { try expect(error.localizedDescription.contains("暂无"), "empty lyric handling") }
         }
         print("PASS Base64 / JSONP / entity decoding, translations and missing lyrics")
+        try testKugouLyrics()
         try expect(try OnlineLookup.parseSongs(json(["code": 200, "result": ["songCount": 0]]), source: .netease).isEmpty, "zero result")
         for value in [["code": 401], ["code": 200, "unexpected": 1]] {
             do { _ = try OnlineLookup.parseSongs(json(value), source: .netease); throw AppError.message("accepted service error") }
@@ -99,6 +100,69 @@ private final class StubProtocol: URLProtocol {
         catch let error as AppError { try expect(error.localizedDescription.contains("HTTPS"), "HTTPS restriction") }
         print("PASS request headers, Unicode/special-character escaping, detail POST and transport errors")
         try await testBatchLookup(session: session)
+        try await testKugouRequests(session: session)
+    }
+
+    private static func testKugouLyrics() throws {
+        // Independently encoded synthetic KRC with a blank timed row and a 10 ms offset.
+        let bilingual = Data(base64Encoded: "a3JjMTjbHPsfXfYHRbLe08Q9i5kA0HnVEyZRqTdlWhROwGHFbKP4mjTusdEu6TT+anVwN56LBZF1Zt3c51pVCfWkf2jBJCf3AJw5cWBuXPgZ48tIHWhs+sejTfxM1twMOlV8E898Pf7yUWkSMV5T3TlN/zw5qZWBcVGHSNJd9AQ8queNsOX/awXDDGI5raNiV2+xu96uNoIgg0zKW71grxFk0yIn6RQa+r8IN4sxMQLK6qOoS9vloFrdssm2i6gjT5BDLgWXZpmCVEZi8AFKQ6iR6/4udZUJXki2HCI=")!
+        let mismatched = Data(base64Encoded: "a3JjMTjbHPuTOPYHRbPGE4vdjosqbURhqhW5ZxQzWGTFfycHTRRZ5LvpQ10QnSe6tRyPFWei+F9Aa7U7B+V6Q3Vi4TRg0DpmKRfqoa2P7j1Bnin7DO8FfuPdFBa0VPxefxBL57P/x0K/Ej1voM2+ZYGbzJy8MAKBORHONHuY5CP+CzQUjUlvMfTie7b0KBT+KKRQIuY7asPoMrSzUTgwtXhEXmXx08tkavQdRN+0KIQT1pRdkzI9uLJP7BkKvwOgem9ZV9EVIA==")!
+        let originalOnly = Data(base64Encoded: "a3JjMTjb6lmXhgaM/R4YAIRfi+OOCCpcEB/FdWU2gyDD3mIdjEttFTM+AMvRejIWeR7Mi1JCemeZNljXwq+m59u/antAJcFpPSEndEw9uTPFYnz2BOd3x2QyMdlNXg==")!
+        guard let lyrics = KugouLyrics.decodeKRC(bilingual) else { throw AppError.message("KRC bilingual fixture failed to decode") }
+        let formatted = LyricFormatter.format(original: lyrics.original, translation: lyrics.translation, options: LyricOptions())
+        try expect(formatted == "[ti:Fixture]\n[00:01.01]First line 甲句\n[00:02.21]\n[00:03.46]Last line 乙句", "KRC line times, word tags, translation ordinals and shared offset")
+        for sample in [mismatched, originalOnly] {
+            let result = KugouLyrics.decodeKRC(sample)
+            try expect(result?.original == lyrics.original && result?.translation == nil, "KRC preserves original without an aligned translation")
+        }
+        for sample in [Data(), Data("bad!".utf8) + bilingual.dropFirst(4), Data(bilingual.prefix(10))] {
+            try expect(KugouLyrics.decodeKRC(sample) == nil, "Malformed KRC rejected")
+        }
+        print("PASS Kugou KRC: aligned bilingual lyrics, offsets, missing and misaligned translation, invalid content")
+    }
+
+    @MainActor private static func testKugouRequests(session: URLSession) async throws {
+        let primary: [String: Any] = ["ID": 31, "SongName": "Sample", "SingerName": "Artist", "AlbumName": "Album A", "Duration": 180]
+        let related: [String: Any] = ["ID": 32, "SongName": "Sample", "SingerName": "Artist", "AlbumName": "Album B", "Duration": 180]
+        var group = primary
+        group["Grp"] = [primary, related]
+        let search = try json(["status": 1, "error_code": 0, "data": ["lists": [group]]])
+        StubProtocol.handler = { request in
+            try expect(request.url?.host == "songsearch.kugou.com", "Ambiguous grouping must skip lyric and cover requests")
+            return (200, search)
+        }
+        let tags = AudioTags(title: "Sample", artist: "Artist")
+        let song = TrackItem(id: UUID(), url: URL(fileURLWithPath: "/tmp/Artist - Sample.flac"), tags: tags, savedTags: tags,
+                             duration: 180, size: 0, sampleRate: 0, channels: 0, issue: nil)
+        do {
+            _ = try await OnlineLookup.batchResult(for: song, source: .kugou, session: session)
+            throw AppError.message("Accepted ambiguous grouped result")
+        } catch let error as AppError {
+            try expect(error.localizedDescription.contains("多个"), "Grouped search must preserve ambiguity when the local album is absent")
+        }
+
+        let original = "[00:01.00]Original"
+        StubProtocol.handler = { request in
+            guard let url = request.url,
+                  let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems else {
+                throw AppError.message("Missing lyric request URL")
+            }
+            if url.path == "/search" {
+                try expect(query.contains(URLQueryItem(name: "duration", value: "180000")), "Lyric search requests milliseconds")
+                let candidates: [[String: Any]] = [
+                    ["id": "other", "accesskey": "test", "song": "Sample", "singer": "Other", "duration": 180000],
+                    ["id": "matched", "accesskey": "test", "song": "Sample", "singer": "Artist", "duration": 180000]
+                ]
+                return (200, try json(["status": 200, "candidates": candidates]))
+            }
+            try expect(url.path == "/download" && query.contains(URLQueryItem(name: "id", value: "matched")), "Lyric download uses only the matching candidate")
+            let content = query.contains(URLQueryItem(name: "fmt", value: "krc")) ? "invalid" : Data(original.utf8).base64EncodedString()
+            return (200, try json(["status": 200, "content": content]))
+        }
+        let lyric = try await KugouLyrics.fetch(title: "Sample", artist: "Artist", hash: nil, duration: 180,
+                                                 includeTranslation: true, session: session)
+        try expect(lyric?.original == original && lyric?.translation == nil, "Kugou preserves LRC when bilingual KRC is unavailable")
+        print("PASS Kugou grouped catalogue ambiguity and original-only LRC fallback")
     }
 
     @MainActor private static func testBatchLookup(session: URLSession) async throws {

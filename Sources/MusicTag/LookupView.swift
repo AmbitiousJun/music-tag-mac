@@ -46,9 +46,10 @@ struct LookupView: View {
                 Picker("来源", selection: $source) {
                     Text("QQ 音乐 · 标签 / 封面 / 歌词").tag(LookupSource.qq)
                     Text("网易云音乐 · 标签 / 封面 / 歌词").tag(LookupSource.netease)
+                    Text("酷狗音乐 · 标签 / 封面 / 歌词").tag(LookupSource.kugou)
                     Text("iTunes · 标签与封面").tag(LookupSource.itunes)
                     Text("LRCLIB · 歌词").tag(LookupSource.lrclib)
-                }.labelsHidden().frame(width: 290)
+                }.labelsHidden().frame(width: 290).accessibilityIdentifier("lookup.source")
                 if source == .itunes { Picker("地区", selection: $country) { Text("中国").tag("CN"); Text("美国").tag("US"); Text("日本").tag("JP"); Text("英国").tag("GB") }.frame(width: 110).disabled(pending) }
                 Spacer()
             }
@@ -79,7 +80,7 @@ struct LookupView: View {
                                         Button("应用封面") { applyArtwork(song) }
                                             .disabled(song.artworkURL == nil && song.source != .netease)
                                             .accessibilityIdentifier("lookup.applyArtwork")
-                                        if song.source == .qq || song.source == .netease {
+                                        if song.source.hasSongLyrics {
                                             Button("预览歌词") { previewLyrics(song) }.accessibilityIdentifier("lookup.previewLyrics")
                                         }
                                     } label: {
@@ -186,7 +187,7 @@ struct LookupView: View {
             let artworkUnavailable = result.artwork.map { artwork in
                 formats.values.contains { !OnlineLookup.canApplyArtwork(artwork, format: $0) }
             } ?? true
-            let missing = [artworkUnavailable ? "封面" : nil, song.source != .itunes && result.lyrics == nil ? "歌词" : nil].compactMap { $0 }
+            let missing = [artworkUnavailable ? "封面" : nil, song.source.hasSongLyrics && result.lyrics == nil ? "歌词" : nil].compactMap { $0 }
             message = updated == 0 ? "没有音乐需要更新" : "已更新 \(updated) 首音乐，关闭窗口后保存以写入文件"
             if !missing.isEmpty { message += "；未获取\(missing.joined(separator: "、"))" }
         }
@@ -253,6 +254,7 @@ struct BatchLookupView: View {
             Picker("数据源", selection: $source) {
                 Text(LookupSource.qq.name).tag(LookupSource.qq)
                 Text(LookupSource.netease.name).tag(LookupSource.netease)
+                Text(LookupSource.kugou.name).tag(LookupSource.kugou)
             }
             .fixedSize()
             .disabled(running)

@@ -21,8 +21,9 @@ enum LyricLookupUITestFixture {
                       let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
                     throw URLError(.badURL)
                 }
-                let isArtwork = components.host == "y.qq.com"
-                    && components.path == "/music/photo_new/T002R800x800M000fixture-apply-all.jpg"
+                let isArtwork = (components.host == "y.qq.com"
+                    && components.path == "/music/photo_new/T002R800x800M000fixture-apply-all.jpg")
+                    || (components.host == "imge.kugou.com" && components.path == "/stdmusic/800/fixture.png")
                 let body: Data
                 if isArtwork {
                     // A 24 × 18 PNG, with dimensions distinct from the local 32 × 32 cover.
@@ -85,6 +86,36 @@ enum LyricLookupUITestFixture {
                     ]]
                 } ?? []
                 return ["code": 0, "req_0": ["data": ["body": ["song": ["list": rows]]]]]
+            case ("songsearch.kugou.com", "/song_search_v2"):
+                let query = params.first { $0.name == "keyword" }?.value ?? ""
+                let songs = ["First Song", "Second Song", "Third Song"]
+                let rows: [[String: Any]] = songs.enumerated().compactMap { index, title in
+                    let number = index + 1
+                    let artist = "Artist \(number)"
+                    guard query == "\(artist) \(title)" else { return nil }
+                    return [
+                        "ID": "\(number)", "SongName": title, "Singers": [["name": artist]],
+                        "AlbumName": "Kugou Album \(number)", "PublishDate": "2024-01-08",
+                        "Duration": 20, "FileHash": "fixture-kugou-\(number)",
+                        "Image": "http://imge.kugou.com/stdmusic/{size}/fixture.png"
+                    ]
+                }
+                return ["status": 1, "error_code": 0, "data": ["lists": rows]]
+            case ("lyrics.kugou.com", "/search"):
+                let hash = params.first { $0.name == "hash" }?.value ?? ""
+                let songs = ["First Song", "Second Song", "Third Song"]
+                let candidates: [[String: Any]] = songs.enumerated().compactMap { index, title in
+                    let number = index + 1
+                    guard hash == "fixture-kugou-\(number)" else { return nil }
+                    return ["id": "\(number)", "accesskey": "fixture", "song": title, "singer": "Artist \(number)", "duration": 20_000]
+                }
+                return ["status": 200, "candidates": candidates]
+            case ("lyrics.kugou.com", "/download"):
+                guard params.contains(where: { $0.name == "fmt" && $0.value == "krc" }) else {
+                    throw URLError(.resourceUnavailable)
+                }
+                // A synthetic two-line KRC sample with word timings and a translation layer.
+                return ["status": 200, "content": "a3JjMTjbXL6fOPZ3TbbAloEDbRG47E1d9HEtc9qUtRvb3UCu2MpMK3jIgMITkT5TkXRkRNoFkXKxkP6+WWSzLZmU/qmKtcGtavQnW78a72tYAYb8gL6igxMDCdJGj1CJ9TuUsX9cfW3NhuaB/M6qxIlpFRoKJvRMx9V3/2K2TRQKV5s3lrFcJgxBU7TSKZDcbDOolSEzWJtx3pd/Uw=="]
             case ("c.y.qq.com", "/lyric/fcgi-bin/fcg_query_lyric_new.fcg"):
                 let mid = params.first { $0.name == "songmid" }?.value
                 guard let mid, songMids.contains(mid) else {

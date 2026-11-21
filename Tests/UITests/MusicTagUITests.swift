@@ -471,6 +471,73 @@ final class MusicTagUITests: XCTestCase {
         app.buttons["完成"].click()
     }
 
+    func testKugouSingleAndBatchLookupWithUndo() throws {
+        app.terminate()
+        app.launchEnvironment.removeValue(forKey: "MUSICTAG_UI_TEST_BATCH_LOOKUP_GATE")
+        app.launchEnvironment["MUSICTAG_UI_TEST_LYRICS_FIXTURE"] = "1"
+        app.launch()
+        try openLyricSettings()
+        try configurePlainLyrics()
+        let settings = app.windows.containing(.staticText, identifier: "lyricSettings.preview").firstMatch
+        settings.buttons["_XCUI:CloseWindow"].click()
+        try waitUntil("Settings window closes") { !self.app.staticTexts["lyricSettings.preview"].exists }
+
+        let original = try TagEngine.read(from: fixtures.songs[0])
+        try importFolder()
+        try selectSong(0)
+        app.toolbars.buttons.matching(NSPredicate(format: "label == %@", "搜索标签")).firstMatch.click()
+        try selectLookupSource("酷狗音乐 · 标签 / 封面 / 歌词", picker: "lookup.source")
+        app.buttons["搜索"].click()
+        let actions = app.descendants(matching: .any).matching(identifier: "lookup.actions").firstMatch
+        XCTAssertTrue(actions.waitForExistence(timeout: 5))
+        actions.click()
+        let preview = app.menuItems["预览歌词"]
+        XCTAssertTrue(preview.waitForExistence(timeout: 5))
+        preview.click()
+        try expectLabel("lookup.lyricPreview", qqBilingualLyrics)
+        app.typeKey(.escape, modifierFlags: [])
+        app.buttons["lookup.applyAll"].click()
+        try expectLabel("lookup.status", "已更新 1 首音乐，关闭窗口后保存以写入文件")
+        app.buttons["完成"].click()
+        try expectValue(app.textFields["tag.专辑"], "Kugou Album 1")
+        try expectLabel("24 × 18", "24 × 18")
+        try showLyricsEditor()
+        try expectValue(findLyricsEditor(), qqBilingualLyrics)
+        XCTAssertEqual(try TagEngine.read(from: fixtures.songs[0]), original)
+        app.buttons["toolbar.undo"].firstMatch.click()
+        try waitUntil("One undo clears the single update") { !self.app.staticTexts["library.dirtyCount"].exists }
+        try expectValue(findLyricsEditor(), original.lyrics)
+
+        XCUIElement.perform(withKeyModifiers: .command) { row(2).click() }
+        try fillBatchLyrics(source: "酷狗音乐")
+        try selectSong(2)
+        try expectValue(findLyricsEditor(), qqBilingualLyrics)
+        app.buttons["toolbar.undo"].firstMatch.click()
+        try waitUntil("One undo clears both batch updates") { !self.app.staticTexts["library.dirtyCount"].exists }
+        XCUIElement.perform(withKeyModifiers: .command) { row(0).click() }
+        try fillBatchLyrics(source: "酷狗音乐")
+        app.toolbars.buttons.matching(identifier: "toolbar.saveAll").firstMatch.click()
+        try expectLabel("library.status", "已保存 2 首音乐")
+        for index in [0, 2] {
+            let saved = try TagEngine.read(from: fixtures.songs[index])
+            XCTAssertEqual(saved.album, "Kugou Album \(index + 1)")
+            XCTAssertEqual(saved.lyrics, qqBilingualLyrics)
+            let artwork = try XCTUnwrap(saved.artwork)
+            XCTAssertEqual(NSBitmapImageRep(data: artwork)?.pixelsWide, 24)
+        }
+        XCTAssertEqual(try TagEngine.read(from: fixtures.songs[1]).album, "Original Album 2")
+        try verifyAudio()
+    }
+
+    private func selectLookupSource(_ label: String, picker: String) throws {
+        let selector = app.descendants(matching: .any).matching(identifier: picker).firstMatch
+        XCTAssertTrue(selector.waitForExistence(timeout: 5))
+        selector.click()
+        let option = app.menuItems[label]
+        XCTAssertTrue(option.waitForExistence(timeout: 5))
+        option.click()
+    }
+
     private let qqBilingualLyrics = "First line 第一行\nSecond line 第二行"
     private let bilingualLyrics = "第一行 First line\n第二行 Second line"
     private let plainOriginalLyrics = "第一行\n第二行"
@@ -512,8 +579,9 @@ final class MusicTagUITests: XCTestCase {
         _ = try findLyricsEditor()
     }
 
-    private func fillBatchLyrics() throws {
+    private func fillBatchLyrics(source: String? = nil) throws {
         app.buttons["library.batchLookup"].click()
+        if let source { try selectLookupSource(source, picker: "batchLookup.source") }
         let start = app.buttons["batchLookup.start"]
         XCTAssertTrue(start.waitForExistence(timeout: 5))
         start.click()

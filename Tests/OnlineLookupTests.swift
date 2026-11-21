@@ -5,9 +5,9 @@ import Foundation
     static func main() async throws {
         setbuf(stdout, nil)
         var failures: [String] = []
-        for source in [LookupSource.qq, .netease, .itunes] {
+        for source in [LookupSource.qq, .netease, .kugou, .itunes] {
             do {
-                let query = source == .qq ? "周杰伦 晴天" : source == .netease ? "陈奕迅 十年" : "The Beatles Yesterday"
+                let query = source == .qq || source == .kugou ? "周杰伦 晴天" : source == .netease ? "陈奕迅 十年" : "The Beatles Yesterday"
                 let songs = try await OnlineLookup.songs(query: query, country: "US", source: source)
                 guard let first = songs.first else { throw AppError.message("No search results") }
                 print("PASS \(source.name): HTTPS search (\(songs.count) results), first: \(first.trackName ?? "") / \(first.artistName ?? "")")
@@ -18,7 +18,7 @@ import Foundation
                 let image = try await OnlineLookup.fetch(url)
                 guard NSImage(data: image) != nil else { throw AppError.message("Invalid artwork") }
                 print("PASS \(source.name): HTTPS cover / native image decoding (\(image.count) bytes)")
-                if source == .qq || source == .netease {
+                if source.hasSongLyrics {
                     let lyrics = try await OnlineLookup.lyrics(for: song)
                     guard lyrics.contains("[") && lyrics.count > 100 else { throw AppError.message("No usable synchronized lyrics") }
                     print("PASS \(source.name): LRC lyrics (\(lyrics.count) characters)")
@@ -30,6 +30,23 @@ import Foundation
             guard lyrics.contains(where: { !$0.lyrics.isEmpty }) else { throw AppError.message("No usable lyrics") }
             print("PASS LRCLIB: HTTPS search and lyric decoding (\(lyrics.count) results)")
         } catch { failures.append("LRCLIB: \(error.localizedDescription)"); print("FAIL \(failures.last!)") }
+        do {
+            let songs = try await OnlineLookup.songs(query: "Adele Hello", source: .kugou)
+            guard let song = songs.first(where: { $0.trackName == "Hello" && $0.artistName == "Adele" && $0.kugouHash != nil }) else {
+                throw AppError.message("No exact Adele / Hello catalogue match")
+            }
+            var options = LyricOptions()
+            options.separator = " | "
+            let lyrics = try await OnlineLookup.lyrics(for: song, options: options)
+            let aligned = lyrics.split(separator: "\n").filter { row in
+                guard row.range(of: #"^\[\d+:\d{2}\.\d{2}\]"#, options: .regularExpression) != nil,
+                      let separator = row.range(of: " | ") else { return false }
+                return row[..<separator.lowerBound].range(of: #"[A-Za-z]"#, options: .regularExpression) != nil
+                    && row[separator.upperBound...].range(of: #"\p{Han}"#, options: .regularExpression) != nil
+            }
+            guard aligned.count >= 10 else { throw AppError.message("No aligned English / Chinese lyrics") }
+            print("PASS 酷狗音乐: Adele / Hello has \(aligned.count) aligned English / Chinese lines")
+        } catch { failures.append("酷狗音乐双语歌词: \(error.localizedDescription)"); print("FAIL \(failures.last!)") }
         if !failures.isEmpty { exit(1) }
     }
 }
