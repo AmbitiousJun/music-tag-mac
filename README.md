@@ -116,7 +116,7 @@ XCUITest 通过控件标识定位，操作真实的文件面板、列表、文�
 
 测试 App 的 Bundle ID 为 `app.musictag.mac.uitesting`，与发布版分开。每个用例使用临时样本目录和独立偏好设置会话，结束后清理；只有 Xcode Debug 构建接受 `--ui-test-session UUID`。发布脚本不启用此入口。首次运行时需亲自完成系统的“Enable UI Automation”身份验证；若结果报告 `Timed out while enabling automation mode`，通常应先检查此授权提示。测试使用英文输入环境，建议切到 ABC 输入法，避免第三方输入法授权打断。运行期间避免操作测试窗口。Computer Use 还需单独开启对应组件的屏幕录制和辅助功能权限。
 
-每次运行的日志和 `MusicTag.xcresult` 保存在 `analysis/tests/ui/run-*`，可用 Xcode 打开结果查看截图、控件树和失败时的样本附件。可用 `MUSICTAG_UI_RESULTS_DIR` 指定输出目录。验证工作流在发布时统一手动触发，UI 工作流保留结果与日志 14 天。
+每次运行的日志和 `MusicTag.xcresult` 保存在 `analysis/tests/ui/run-*`，可用 Xcode 打开结果查看截图、控件树和失败时的样本附件。可用 `MUSICTAG_UI_RESULTS_DIR` 指定输出目录。发布时手动运行 `Validate macOS release` 工作流，统一验证本地标签、离线查找、图标、真实在线来源、原生列表和 XCUITest。桌面测试前检查并选择 ABC 输入法，测试结果与日志保留 14 天。
 
 人工或 Computer Use 验收可使用同一套一次性样本：
 
