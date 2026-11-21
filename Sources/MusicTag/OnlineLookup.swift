@@ -4,14 +4,30 @@ import ImageIO
 import Security
 
 enum LookupSource: String, CaseIterable, Identifiable {
-    case qq, netease, itunes, lrclib
+    case qq, netease, kugou, itunes, lrclib
     var id: String { rawValue }
     var name: String {
-        switch self { case .qq: return "QQ 音乐"; case .netease: return "网易云音乐"; case .itunes: return "iTunes"; case .lrclib: return "LRCLIB" }
+        switch self {
+        case .qq: return "QQ 音乐"
+        case .netease: return "网易云音乐"
+        case .kugou: return "酷狗音乐"
+        case .itunes: return "iTunes"
+        case .lrclib: return "LRCLIB"
+        }
     }
     var website: URL {
-        URL(string: self == .qq ? "https://y.qq.com" : self == .netease ? "https://music.163.com" : self == .itunes ? "https://music.apple.com" : "https://lrclib.net")!
+        let address: String
+        switch self {
+        case .qq: address = "https://y.qq.com"
+        case .netease: address = "https://music.163.com"
+        case .kugou: address = "https://www.kugou.com"
+        case .itunes: address = "https://music.apple.com"
+        case .lrclib: address = "https://lrclib.net"
+        }
+        return URL(string: address)!
     }
+
+    var hasSongLyrics: Bool { self == .qq || self == .netease || self == .kugou }
 }
 
 struct CatalogSong: Identifiable {
@@ -29,6 +45,7 @@ struct CatalogSong: Identifiable {
     var artworkUrl100: String?
     var trackViewUrl: String?
     var songMid: String?
+    var kugouHash: String?
     var duration: Double?
     var id: String { "\(source.rawValue):\(trackId)" }
     var artworkURL: URL? { OnlineLookup.httpsURL(artworkUrl100) }
@@ -99,6 +116,11 @@ enum OnlineLookup {
         case .netease:
             let request = try neteaseRequest(path: "/weapi/cloudsearch/pc", payload: ["s": query, "type": 1, "limit": 25, "total": true, "offset": 0, "csrf_token": ""])
             return try parseSongs(await fetch(request, session: session), source: source)
+        case .kugou:
+            let endpoint = url("https://songsearch.kugou.com/song_search_v2", [
+                "keyword": query, "page": "1", "pagesize": "20", "platform": "WebFilter"
+            ])
+            return try parseSongs(await fetch(request(endpoint, source: source), session: session), source: source)
         case .itunes:
             let endpoint = url("https://itunes.apple.com/search", ["term": query, "entity": "song", "media": "music", "country": country, "limit": "25"])
             return try parseSongs(await fetch(request(endpoint, source: source), session: session), source: source)
@@ -126,7 +148,15 @@ enum OnlineLookup {
         case .netease:
             let endpoint = url("https://music.163.com/api/song/lyric", ["os": "pc", "id": String(song.trackId), "lv": "-1", "kv": "-1", "tv": "-1"])
             return try parseLyrics(await fetch(request(endpoint, source: .netease), session: session), source: .netease, options: options)
-        default: throw AppError.message("请选择 QQ 音乐、网易云音乐或 LRCLIB 查询歌词")
+        case .kugou:
+            let lyrics = try await KugouLyrics.fetch(
+                title: song.trackName ?? "", artist: song.artistName ?? "", hash: song.kugouHash,
+                duration: song.duration.flatMap(Int.init(exactly:)), includeTranslation: options.translationEnabled, session: session
+            )
+            let text = LyricFormatter.format(original: lyrics?.original ?? "", translation: lyrics?.translation, options: options)
+            guard !text.isEmpty else { throw AppError.message("酷狗音乐暂无可用歌词（可能为纯音乐）") }
+            return text
+        default: throw AppError.message("请选择 QQ 音乐、网易云音乐、酷狗音乐或 LRCLIB 查询歌词")
         }
     }
 
@@ -219,7 +249,7 @@ enum OnlineLookup {
     }
 
     private static func catalogLyrics(_ song: CatalogSong, options: LyricOptions, session: URLSession) async -> String? {
-        guard song.source == .qq || song.source == .netease,
+        guard song.source.hasSongLyrics,
               let text = try? await lyrics(for: song, options: options, session: session),
               !text.isEmpty else { return nil }
         return text
@@ -257,8 +287,10 @@ enum OnlineLookup {
         let root = try object(data)
         try checkCode(root, source: source)
         let rows: [Object]
+        let idField: String
         switch source {
         case .qq:
+            idField = "id"
             if let req = root["req_0"] as? Object {
                 try checkCode(req, source: source)
                 guard let payload = req["data"] as? Object, let body = payload["body"] as? Object, let song = body["song"] as? Object, let list = song["list"] as? [Object] else { throw invalid(source) }
@@ -275,20 +307,31 @@ enum OnlineLookup {
                 }
             }
         case .netease:
+            idField = "id"
             if let songs = root["songs"] as? [Object] { rows = songs }
             else if let result = root["result"] as? Object {
                 if let songs = result["songs"] as? [Object] { rows = songs }
                 else if integer(result["songCount"]) == 0 { rows = [] }
                 else { throw invalid(source) }
             } else { throw invalid(source) }
+        case .kugou:
+            idField = "ID"
+            guard integer(root["status"]) == 1, integer(root["error_code"]) == 0 else {
+                throw AppError.message("酷狗音乐请求失败，请稍后重试")
+            }
+            guard let payload = root["data"] as? Object, let results = payload["lists"] as? [Object] else {
+                throw invalid(source)
+            }
+            rows = results.flatMap { row in [row] + (row["Grp"] as? [Object] ?? []) }
         case .itunes:
+            idField = "trackId"
             guard let results = root["results"] as? [Object] else { throw invalid(source) }
             rows = results
-        case .lrclib: rows = []
+        case .lrclib: return []
         }
         var seen = Set<Int>()
         return rows.compactMap { row in
-            guard let id = integer(row[source == .itunes ? "trackId" : "id"]), id > 0, seen.insert(id).inserted else { return nil }
+            guard let id = positive(row[idField]), seen.insert(id).inserted else { return nil }
             var song = CatalogSong(source: source, trackId: id)
             switch source {
             case .qq:
@@ -318,6 +361,24 @@ enum OnlineLookup {
                 let timestamp = (row["publishTime"] as? NSNumber)?.doubleValue ?? (album["publishTime"] as? NSNumber)?.doubleValue ?? 0
                 if timestamp > 0 { song.releaseDate = date(timestamp / 1000) }
                 song.trackViewUrl = "https://music.163.com/#/song?id=\(id)"
+            case .kugou:
+                song.trackName = string(row["SongName"])
+                song.artistName = names(row["Singers"]) ?? string(row["SingerName"])
+                song.collectionName = string(row["AlbumName"])
+                song.duration = positive(row["Duration"]).map(Double.init)
+                if let date = string(row["PublishDate"]), date.prefix(4).count == 4,
+                   let year = Int(date.prefix(4)), year > 0 {
+                    song.releaseDate = date
+                }
+                song.kugouHash = string(row["FileHash"])
+                for field in ["AlbumImage", "Image"] {
+                    guard let raw = string(row[field]),
+                          let artwork = httpsURL(raw.replacingOccurrences(of: "{size}", with: "800")),
+                          artwork.host?.hasSuffix(".kugou.com") == true,
+                          artwork.path.hasPrefix("/stdmusic/") else { continue }
+                    song.artworkUrl100 = artwork.absoluteString
+                    break
+                }
             case .itunes:
                 song.trackName = string(row["trackName"]); song.artistName = string(row["artistName"]); song.collectionName = string(row["collectionName"])
                 song.duration = positive(row["trackTimeMillis"]).map { Double($0) / 1000 }
