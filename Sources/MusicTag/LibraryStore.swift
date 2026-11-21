@@ -73,6 +73,11 @@ struct TagField: Identifiable {
             }
         }
     }
+    @Published private(set) var aggregateSources: Set<LookupSource> {
+        didSet {
+            defaults.set(aggregateSources.map(\.rawValue).sorted(), forKey: Self.aggregateSourcesKey)
+        }
+    }
     @Published var sortMode = 0
     private var player: AVAudioPlayer?
     private var undoHistory: [[UUID: AudioTags]] = []
@@ -80,11 +85,15 @@ struct TagField: Identifiable {
     private var lastEditTime = Date.distantPast
     private static let lastDirectoryPathsKey = "lastImportedDirectoryPaths"
     private static let lyricOptionsKey = "lyricOptions"
+    private static let aggregateSourcesKey = "aggregateLookupSources"
     private let defaults: UserDefaults
     private var didAttemptDirectoryRestore = false
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        let savedSources = Set((defaults.stringArray(forKey: Self.aggregateSourcesKey) ?? [])
+            .compactMap(LookupSource.init(rawValue:)))
+        aggregateSources = savedSources.isEmpty ? [.qq, .netease, .kugou] : savedSources
         var options = defaults.data(forKey: Self.lyricOptionsKey)
             .flatMap { try? JSONDecoder().decode(LyricOptions.self, from: $0) } ?? LyricOptions()
         if defaults.object(forKey: Self.lyricOptionsKey) == nil,
@@ -99,6 +108,17 @@ struct TagField: Identifiable {
            let data = try? JSONEncoder().encode(options) {
             defaults.set(data, forKey: Self.lyricOptionsKey)
         }
+    }
+
+    func setAggregateSource(_ source: LookupSource, enabled: Bool) {
+        var sources = aggregateSources
+        if enabled {
+            sources.insert(source)
+        } else {
+            sources.remove(source)
+        }
+        guard !sources.isEmpty, sources != aggregateSources else { return }
+        aggregateSources = sources
     }
 
     private static func isExistingDirectory(_ url: URL) -> Bool {

@@ -1,12 +1,43 @@
 import SwiftUI
 
 struct LyricSettingsView: View {
+    @EnvironmentObject private var store: LibraryStore
     @Binding var options: LyricOptions
 
     private static let sampleOriginal = "[ti:测试歌]\n[00:01.2]第一行\n[00:02.30]第二行"
     private static let sampleTranslation = "[00:01.20]First line\n[00:02.300]Second line"
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            aggregateSettings
+            Divider()
+            lyricSettings
+        }
+        .padding(24)
+        .frame(width: 640)
+    }
+
+    private var aggregateSettings: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("聚合搜索来源").font(.headline)
+            HStack(spacing: 16) {
+                ForEach(LookupSource.allCases) { source in
+                    Toggle(source.name, isOn: Binding(
+                        get: { store.aggregateSources.contains(source) },
+                        set: { store.setAggregateSource(source, enabled: $0) }
+                    ))
+                    .disabled(store.aggregateSources.count == 1 && store.aggregateSources.contains(source))
+                    .accessibilityIdentifier("lookupSettings.source.\(source.rawValue)")
+                }
+            }
+            .toggleStyle(.checkbox)
+            Text("至少选择一个来源。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var lyricSettings: some View {
         HStack(alignment: .top, spacing: 24) {
             VStack(alignment: .leading, spacing: 16) {
                 Form {
@@ -75,7 +106,5 @@ struct LyricSettingsView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(24)
-        .frame(width: 640)
     }
 }
