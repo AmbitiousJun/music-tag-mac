@@ -29,7 +29,14 @@ enum LyricLookupUITestFixture {
                     // A 24 × 18 PNG, with dimensions distinct from the local 32 × 32 cover.
                     body = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAABgAAAASCAIAAADOjonJAAAAG0lEQVR4nGOYwNFMFcQwatCoQaMGjRo03AwCAAF43aBdbjGIAAAAAElFTkSuQmCC")!
                 } else {
-                    body = try JSONSerialization.data(withJSONObject: payload(for: components))
+                    recordSearch(components)
+                    let result: Any
+                    if components.host == "lrclib.net", components.path == "/api/search" {
+                        result = lrclibSearchPayload(for: components)
+                    } else {
+                        result = try payload(for: components)
+                    }
+                    body = try JSONSerialization.data(withJSONObject: result)
                 }
                 let contentType = isArtwork ? "image/png" : "application/json"
                 guard let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1",
@@ -46,6 +53,33 @@ enum LyricLookupUITestFixture {
 
         override func stopLoading() {}
 
+        private func recordSearch(_ url: URLComponents) {
+            guard let directory = ProcessInfo.processInfo.environment["MUSICTAG_UI_TEST_LOOKUP_REQUESTS"] else { return }
+            let source: String
+            switch (url.host, url.path) {
+            case ("u.y.qq.com", "/cgi-bin/musicu.fcg"):
+                let raw = url.queryItems?.first { $0.name == "data" }?.value ?? ""
+                guard let request = try? JSONDecoder().decode(MusicuRequest.self, from: Data(raw.utf8)),
+                      request.req_0.method == "DoSearchForQQMusicDesktop" else { return }
+                source = "qq"
+            case ("music.163.com", "/weapi/cloudsearch/pc"): source = "netease"
+            case ("songsearch.kugou.com", "/song_search_v2"): source = "kugou"
+            case ("itunes.apple.com", "/search"): source = "itunes"
+            case ("lrclib.net", "/api/search"): source = "lrclib"
+            default: return
+            }
+            let marker = URL(fileURLWithPath: directory, isDirectory: true).appendingPathComponent(source)
+            try? Data().write(to: marker, options: .atomic)
+        }
+
+        private func lrclibSearchPayload(for url: URLComponents) -> [[String: Any]] {
+            guard url.queryItems?.contains(where: { $0.name == "q" && $0.value == "Aggregate Fixture" }) == true else {
+                return []
+            }
+            return [["id": 1, "trackName": "Aggregate Fixture Lyrics", "artistName": "Lyrics Artist",
+                     "syncedLyrics": "[00:01.00]Lyrics from LRCLIB"]]
+        }
+
         private func payload(for url: URLComponents) throws -> [String: Any] {
             let params = url.queryItems ?? []
             switch (url.host, url.path) {
@@ -61,11 +95,18 @@ enum LyricLookupUITestFixture {
                     }
                     let original = "[ti:测试歌]\n[00:01.2]First line\n[00:02.30]Second line"
                     let translation = "[00:01.20]第一行\n[00:02.300]第二行"
-                    return ["code": 0, "req_0": ["code": 0, "data": [
+                    let lyrics: [String: Any] = [
                         "songID": songIndex + 1,
                         "lyric": Data(original.utf8).base64EncodedString(),
                         "trans": Data(translation.utf8).base64EncodedString()
-                    ]]]
+                    ]
+                    let response: [String: Any] = ["code": 0, "data": lyrics]
+                    return ["code": 0, "req_0": response]
+                }
+                if body.req_0.param.query == "Aggregate Fixture" {
+                    let row: [String: Any] = ["id": 1, "mid": "fixture-1", "name": "Fixture Loose Match",
+                        "singer": [["name": "Other Artist"]], "album": ["name": "Other Album"]]
+                    return ["code": 0, "req_0": ["data": ["body": ["song": ["list": [row]]]]]]
                 }
                 if body.req_0.param.query == "Apply All Fixture" {
                     let rows: [[String: Any]] = [[
@@ -88,6 +129,11 @@ enum LyricLookupUITestFixture {
                 return ["code": 0, "req_0": ["data": ["body": ["song": ["list": rows]]]]]
             case ("songsearch.kugou.com", "/song_search_v2"):
                 let query = params.first { $0.name == "keyword" }?.value ?? ""
+                if query == "Aggregate Fixture" {
+                    let row: [String: Any] = ["ID": "1", "SongName": "Aggregate Fixture (Live)",
+                                               "Singers": [["name": "Kugou Artist"]], "AlbumName": "Kugou Album"]
+                    return ["status": 1, "error_code": 0, "data": ["lists": [row]]]
+                }
                 let songs = ["First Song", "Second Song", "Third Song"]
                 let rows: [[String: Any]] = songs.enumerated().compactMap { index, title in
                     let number = index + 1
@@ -101,6 +147,13 @@ enum LyricLookupUITestFixture {
                     ]
                 }
                 return ["status": 1, "error_code": 0, "data": ["lists": rows]]
+            case ("itunes.apple.com", "/search"):
+                let query = params.first { $0.name == "term" }?.value
+                let rows: [[String: Any]] = query == "Aggregate Fixture" ? [[
+                    "trackId": 1, "trackName": "Aggregate Fixture", "artistName": "iTunes Artist",
+                    "collectionName": "iTunes Album", "trackTimeMillis": 20_000
+                ]] : []
+                return ["results": rows]
             case ("lyrics.kugou.com", "/search"):
                 let hash = params.first { $0.name == "hash" }?.value ?? ""
                 let songs = ["First Song", "Second Song", "Third Song"]

@@ -94,9 +94,105 @@ struct LyricResult: Decodable, Identifiable {
     }
 }
 
+enum LookupResult: Identifiable {
+    case song(CatalogSong)
+    case lyric(LyricResult)
+
+    var id: String {
+        switch self {
+        case .song(let song): return song.id
+        case .lyric(let lyric): return "\(LookupSource.lrclib.rawValue):\(lyric.id)"
+        }
+    }
+
+    var searchFields: (title: String, artist: String, album: String) {
+        switch self {
+        case .song(let song): return (song.trackName ?? "", song.artistName ?? "", song.collectionName ?? "")
+        case .lyric(let lyric): return (lyric.trackName, lyric.artistName, lyric.albumName ?? "")
+        }
+    }
+}
+
+struct AggregateLookupResponse {
+    let results: [LookupResult]
+    let failedSources: [LookupSource]
+}
+
 /// Native implementation of MusicTag.exe's QQ / NetEase providers; no Windows runtime.
 enum OnlineLookup {
     typealias Object = [String: Any]
+    private typealias LookupScore = (coverage: Int, exactness: Int, titleMatches: Int, contiguous: Int)
+
+    static func aggregate(query: String, country: String = "CN", sources: Set<LookupSource>, session: URLSession = .shared) async throws -> AggregateLookupResponse {
+        let selected = LookupSource.allCases.filter(sources.contains)
+        return try await withThrowingTaskGroup(of: (LookupSource, [LookupResult]?).self) { group in
+            for source in selected {
+                group.addTask {
+                    do {
+                        let results: [LookupResult]
+                        if source == .lrclib {
+                            results = try await lyrics(query: query, session: session).map(LookupResult.lyric)
+                        } else {
+                            results = try await songs(query: query, country: country, source: source, session: session).map(LookupResult.song)
+                        }
+                        return (source, results)
+                    } catch {
+                        try Task.checkCancellation()
+                        return (source, nil)
+                    }
+                }
+            }
+            var bySource: [LookupSource: [LookupResult]] = [:]
+            for try await (source, results) in group { bySource[source] = results }
+            try Task.checkCancellation()
+
+            // Seed the ranking with provider order and each provider's result order,
+            // so equally relevant rows never depend on network completion order.
+            let candidates = selected.flatMap { bySource[$0] ?? [] }
+            let keywords = searchTerms(query)
+            let scores = candidates.map { relevance($0, keywords: keywords) }
+            let ranked = candidates.indices.sorted { left, right in
+                let lhs = scores[left], rhs = scores[right]
+                return lhs == rhs ? left < right : lhs > rhs
+            }
+            var seen = Set<String>()
+            return AggregateLookupResponse(
+                results: ranked.map { candidates[$0] }.filter { seen.insert($0.id).inserted },
+                failedSources: selected.filter { bySource[$0] == nil }
+            )
+        }
+    }
+
+    private static func searchTerms(_ text: String) -> [String] {
+        normalized(text).folding(options: .diacriticInsensitive, locale: nil)
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+    }
+
+    private static func relevance(_ result: LookupResult, keywords: [String]) -> LookupScore {
+        let fields = result.searchFields
+        let title = searchTerms(fields.title), artist = searchTerms(fields.artist), album = searchTerms(fields.album)
+        let terms = title + artist + album
+        let query = keywords.joined()
+        guard !query.isEmpty else { return (0, 0, 0, 0) }
+        let titleKey = title.joined(), artistKey = artist.joined(), albumKey = album.joined()
+        let titleAndArtist = !titleKey.isEmpty && !artistKey.isEmpty
+            && (query == titleKey + artistKey || query == artistKey + titleKey)
+        let exact: Int
+        switch query {
+        case _ where titleAndArtist: exact = 4
+        case titleKey: exact = 3
+        case artistKey: exact = 2
+        case albumKey: exact = 1
+        default: exact = 0
+        }
+        let covered = exact > 0 ? keywords.count : keywords.filter { keyword in
+            terms.contains { $0.contains(keyword) }
+        }.count
+        let titleMatches = keywords.filter { keyword in title.contains { $0.contains(keyword) } }.count
+        let contiguous = [title + artist + album, artist + title + album].contains { $0.joined().contains(query) }
+        return (covered, exact, titleMatches, contiguous ? 1 : 0)
+    }
+
     static func songs(query: String, country: String = "CN", source: LookupSource = .itunes, session: URLSession = .shared) async throws -> [CatalogSong] {
         switch source {
         case .qq:

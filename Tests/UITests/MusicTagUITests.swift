@@ -7,6 +7,7 @@ final class MusicTagUITests: XCTestCase {
     private var session: String!
     private var suite: String { "app.musictag.mac.uitesting.\(session!)" }
     private var batchLookupGate: URL { fixtures.root.appendingPathComponent("release-batch-lookup") }
+    private var lookupRequests: URL { fixtures.root.appendingPathComponent("lookup-requests", isDirectory: true) }
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -329,6 +330,99 @@ final class MusicTagUITests: XCTestCase {
         try expectToggle("lyricSettings.removeHeaders", enabled: false)
     }
 
+    func testAggregateLookupRanksSourcesAndAppliesLyrics() throws {
+        try launchWithLookupRequestRecording()
+        try importFolder()
+        try selectSong(0)
+        try searchAggregateFixture()
+
+        let kugouResult = app.staticTexts["Aggregate Fixture (Live)"]
+        let qqResult = app.staticTexts["Fixture Loose Match"]
+        XCTAssertTrue(kugouResult.waitForExistence(timeout: 5))
+        XCTAssertTrue(qqResult.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["酷狗音乐"].exists)
+        XCTAssertTrue(app.staticTexts["QQ 音乐"].exists)
+        XCTAssertLessThan(kugouResult.frame.minY, qqResult.frame.minY)
+        try expectLabel("lookup.status", "找到 2 个结果；搜索失败：网易云音乐")
+        XCTAssertEqual(try requestedLookupSources(), ["qq", "netease", "kugou"])
+        app.buttons["完成"].click()
+
+        try openLyricSettings()
+        for source in ["itunes", "lrclib"] {
+            let id = "lookupSettings.source.\(source)"
+            try expectToggle(id, enabled: false)
+            app.checkBoxes[id].click()
+            try expectToggle(id, enabled: true)
+        }
+        try closeLyricSettings()
+        try searchAggregateFixture()
+
+        let iTunesResult = app.staticTexts["Aggregate Fixture"]
+        XCTAssertTrue(iTunesResult.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["iTunes"].exists)
+        XCTAssertTrue(app.staticTexts["LRCLIB"].exists)
+        XCTAssertLessThan(iTunesResult.frame.minY, kugouResult.frame.minY)
+        XCTAssertEqual(try requestedLookupSources(), ["qq", "netease", "kugou", "itunes", "lrclib"])
+
+        app.buttons["lookup.previewLyrics"].click()
+        try expectLabel("lookup.lyricPreview", "[00:01.00]Lyrics from LRCLIB")
+        app.buttons["应用歌词"].click()
+        app.buttons["完成"].click()
+        try showLyricsEditor()
+        try expectValue(findLyricsEditor(), "[00:01.00]Lyrics from LRCLIB")
+        app.buttons["toolbar.undo"].firstMatch.click()
+        try expectValue(findLyricsEditor(), "")
+    }
+
+    func testAggregateLookupOnlyRequestsSavedEnabledSources() throws {
+        try launchWithLookupRequestRecording()
+        try importFolder()
+        try openLyricSettings()
+        let defaultSources = ["qq", "netease", "kugou"]
+        app.checkBoxes["lookupSettings.source.lrclib"].click()
+        try expectToggle("lookupSettings.source.lrclib", enabled: true)
+        for source in defaultSources {
+            let id = "lookupSettings.source.\(source)"
+            try expectToggle(id, enabled: true)
+            app.checkBoxes[id].click()
+        }
+        XCTAssertFalse(app.checkBoxes["lookupSettings.source.lrclib"].isEnabled)
+
+        app.terminate()
+        app.launch()
+        try openLyricSettings()
+        for source in defaultSources + ["itunes", "lrclib"] {
+            try expectToggle("lookupSettings.source.\(source)", enabled: source == "lrclib")
+        }
+        try closeLyricSettings()
+
+        try selectSong(0)
+        try searchAggregateFixture()
+        XCTAssertTrue(app.staticTexts["Aggregate Fixture Lyrics"].waitForExistence(timeout: 5))
+        XCTAssertEqual(try requestedLookupSources(), ["lrclib"])
+    }
+
+    private func launchWithLookupRequestRecording() throws {
+        try FileManager.default.createDirectory(at: lookupRequests, withIntermediateDirectories: false)
+        app.terminate()
+        app.launchEnvironment["MUSICTAG_UI_TEST_LYRICS_FIXTURE"] = "1"
+        app.launchEnvironment["MUSICTAG_UI_TEST_LOOKUP_REQUESTS"] = lookupRequests.path
+        app.launch()
+    }
+
+    private func requestedLookupSources() throws -> Set<String> {
+        Set(try FileManager.default.contentsOfDirectory(atPath: lookupRequests.path))
+    }
+
+    private func searchAggregateFixture() throws {
+        app.toolbars.buttons.matching(NSPredicate(format: "label == %@", "搜索标签")).firstMatch.click()
+        let picker = app.descendants(matching: .any).matching(identifier: "lookup.source").firstMatch
+        XCTAssertTrue(picker.waitForExistence(timeout: 5))
+        XCTAssertEqual(picker.value as? String, "聚合")
+        try replace(app.textFields["标题 / 艺术家 / 专辑"], with: "Aggregate Fixture", tabToCommit: false)
+        app.buttons["搜索"].click()
+    }
+
     func testQQLyricsKeepTranslationThroughBatchSave() throws {
         app.terminate()
         app.launchEnvironment.removeValue(forKey: "MUSICTAG_UI_TEST_BATCH_LOOKUP_GATE")
@@ -348,6 +442,7 @@ final class MusicTagUITests: XCTestCase {
         try importFolder()
         try selectSong(0)
         app.toolbars.buttons.matching(NSPredicate(format: "label == %@", "搜索标签")).firstMatch.click()
+        try selectLookupSource("QQ 音乐 · 标签 / 封面 / 歌词", picker: "lookup.source")
         let search = app.buttons["搜索"]
         XCTAssertTrue(search.waitForExistence(timeout: 5))
         search.click()
@@ -547,6 +642,12 @@ final class MusicTagUITests: XCTestCase {
         app.activate()
         app.typeKey(",", modifierFlags: [.command])
         XCTAssertTrue(app.staticTexts["lyricSettings.preview"].waitForExistence(timeout: 5))
+    }
+
+    private func closeLyricSettings() throws {
+        let settings = app.windows.containing(.staticText, identifier: "lyricSettings.preview").firstMatch
+        settings.buttons["_XCUI:CloseWindow"].click()
+        try waitUntil("Settings window closes") { !self.app.staticTexts["lyricSettings.preview"].exists }
     }
 
     private func configurePlainOriginalLyrics() throws {

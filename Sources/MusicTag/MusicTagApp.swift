@@ -65,6 +65,7 @@ import UniformTypeIdentifiers
         }
         Settings {
             LyricSettingsView(options: $store.lyricOptions)
+                .environmentObject(store)
         }
     }
 }

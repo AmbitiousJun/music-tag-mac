@@ -17,9 +17,9 @@ private struct LyricPreview: Identifiable {
 struct LookupView: View {
     @EnvironmentObject var store: LibraryStore
     @State private var query = ""
-    @State private var source: LookupSource = .qq
+    @State private var source: LookupSource?
     @State private var country = "CN"
-    @State private var songs: [CatalogSong] = []
+    @State private var results: [LookupResult] = []
     @State private var lyrics: [LyricResult] = []
     @State private var pending = false
     @State private var message = "输入标题和艺术家，搜索并预览后应用到选中的音乐。"
@@ -44,13 +44,14 @@ struct LookupView: View {
             }
             HStack {
                 Picker("来源", selection: $source) {
-                    Text("QQ 音乐 · 标签 / 封面 / 歌词").tag(LookupSource.qq)
-                    Text("网易云音乐 · 标签 / 封面 / 歌词").tag(LookupSource.netease)
-                    Text("酷狗音乐 · 标签 / 封面 / 歌词").tag(LookupSource.kugou)
-                    Text("iTunes · 标签与封面").tag(LookupSource.itunes)
-                    Text("LRCLIB · 歌词").tag(LookupSource.lrclib)
+                    Text("聚合").tag(nil as LookupSource?)
+                    Text("QQ 音乐 · 标签 / 封面 / 歌词").tag(Optional(LookupSource.qq))
+                    Text("网易云音乐 · 标签 / 封面 / 歌词").tag(Optional(LookupSource.netease))
+                    Text("酷狗音乐 · 标签 / 封面 / 歌词").tag(Optional(LookupSource.kugou))
+                    Text("iTunes · 标签与封面").tag(Optional(LookupSource.itunes))
+                    Text("LRCLIB · 歌词").tag(Optional(LookupSource.lrclib))
                 }.labelsHidden().frame(width: 290).accessibilityIdentifier("lookup.source")
-                if source == .itunes { Picker("地区", selection: $country) { Text("中国").tag("CN"); Text("美国").tag("US"); Text("日本").tag("JP"); Text("英国").tag("GB") }.frame(width: 110).disabled(pending) }
+                if source == .itunes || (source == nil && store.aggregateSources.contains(.itunes)) { Picker("地区", selection: $country) { Text("中国").tag("CN"); Text("美国").tag("US"); Text("日本").tag("JP"); Text("英国").tag("GB") }.frame(width: 110).disabled(pending) }
                 Spacer()
             }
             HStack {
@@ -63,36 +64,12 @@ struct LookupView: View {
             if source != .lrclib {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(songs) { song in
-                            HStack(spacing: 14) {
-                                AsyncImage(url: song.artworkURL) { image in image.resizable().aspectRatio(contentMode: .fit) } placeholder: { Image(systemName: "music.note").font(.title2).foregroundStyle(.tertiary) }.frame(width: 56, height: 56).background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 5))
-                                VStack(alignment: .leading, spacing: 5) {
-                                    Text(song.trackName ?? "未知标题").fontWeight(.medium).lineLimit(1)
-                                    Text("\(song.artistName ?? "") · \(song.collectionName ?? "")").font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                                    Text([song.releaseDate.map { String($0.prefix(4)) }, song.primaryGenreName, song.trackNumber.map { "音轨 \($0)" }].compactMap { $0 }.joined(separator: " · ")).font(.system(size: 10)).foregroundStyle(.secondary)
+                        ForEach(results) { result in
+                            Group {
+                                switch result {
+                                case .song(let song): songRow(song)
+                                case .lyric(let lyric): lyricRow(lyric)
                                 }
-                                Spacer(minLength: 10)
-                                HStack(spacing: 2) {
-                                    Button("一键应用") { applyAll(song) }
-                                        .accessibilityIdentifier("lookup.applyAll")
-                                    Menu {
-                                        Button("应用标签") { applySong(song) }.accessibilityIdentifier("lookup.applyTags")
-                                        Button("应用封面") { applyArtwork(song) }
-                                            .disabled(song.artworkURL == nil && song.source != .netease)
-                                            .accessibilityIdentifier("lookup.applyArtwork")
-                                        if song.source.hasSongLyrics {
-                                            Button("预览歌词") { previewLyrics(song) }.accessibilityIdentifier("lookup.previewLyrics")
-                                        }
-                                    } label: {
-                                        Label("单项操作", systemImage: "chevron.down").labelStyle(.iconOnly)
-                                    }
-                                    .menuIndicator(.hidden)
-                                    .accessibilityLabel("单项操作")
-                                    .accessibilityIdentifier("lookup.actions")
-                                }
-                                .controlSize(.small)
-                                .fixedSize()
-                                .disabled(pending || store.busy)
                             }
                             .padding(.vertical, 12)
                             .padding(.trailing, 20)
@@ -118,7 +95,7 @@ struct LookupView: View {
             HStack {
                 Text("搜索词发送至所选来源；封面从来源加载；应用后仍需保存。").font(.system(size: 10)).foregroundStyle(.secondary)
                 Spacer()
-                Link(source.name, destination: source.website).font(.caption)
+                if let source { Link(source.name, destination: source.website).font(.caption) }
                 Button("完成") { store.showLookup = false }.keyboardShortcut(.defaultAction)
             }
         }.padding(24).frame(width: 780, height: 650)
@@ -126,7 +103,7 @@ struct LookupView: View {
             targetIDs = store.selection
             if let first = store.first { query = [first.tags.artist, first.tags.title.isEmpty ? first.title : first.tags.title].filter { !$0.isEmpty }.joined(separator: " ") }
         }
-        .onChange(of: source) { _ in cancel(); songs = []; lyrics = []; selectedLyric = nil; preview = nil; message = "输入关键词后点击搜索" }
+        .onChange(of: source) { _ in cancel(); results = []; lyrics = []; selectedLyric = nil; preview = nil; message = "输入关键词后点击搜索" }
         .onDisappear { cancel() }
         .sheet(item: $preview) { item in
             VStack(alignment: .leading, spacing: 14) {
@@ -147,6 +124,68 @@ struct LookupView: View {
             }.padding(24).frame(width: 620, height: 500)
         }
     }
+    private func songRow(_ song: CatalogSong) -> some View {
+        HStack(spacing: 14) {
+            AsyncImage(url: song.artworkURL) { image in image.resizable().aspectRatio(contentMode: .fit) } placeholder: { Image(systemName: "music.note").font(.title2).foregroundStyle(.tertiary) }.frame(width: 56, height: 56).background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 5))
+            VStack(alignment: .leading, spacing: 5) {
+                Text(song.trackName ?? "未知标题").fontWeight(.medium).lineLimit(1)
+                Text("\(song.artistName ?? "") · \(song.collectionName ?? "")").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                HStack(spacing: 8) {
+                    if source == nil { Text(song.source.name) }
+                    Text([song.releaseDate.map { String($0.prefix(4)) }, song.primaryGenreName, song.trackNumber.map { "音轨 \($0)" }].compactMap { $0 }.joined(separator: " · "))
+                }
+                .font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 10)
+            HStack(spacing: 2) {
+                Button("一键应用") { applyAll(song) }
+                    .accessibilityIdentifier("lookup.applyAll")
+                Menu {
+                    Button("应用标签") { applySong(song) }.accessibilityIdentifier("lookup.applyTags")
+                    Button("应用封面") { applyArtwork(song) }
+                        .disabled(song.artworkURL == nil && song.source != .netease)
+                        .accessibilityIdentifier("lookup.applyArtwork")
+                    if song.source.hasSongLyrics {
+                        Button("预览歌词") { previewLyrics(song) }.accessibilityIdentifier("lookup.previewLyrics")
+                    }
+                } label: {
+                    Label("单项操作", systemImage: "chevron.down").labelStyle(.iconOnly)
+                }
+                .menuIndicator(.hidden)
+                .accessibilityLabel("单项操作")
+                .accessibilityIdentifier("lookup.actions")
+            }
+            .controlSize(.small)
+            .fixedSize()
+            .disabled(pending || store.busy)
+        }
+    }
+
+    private func lyricRow(_ lyric: LyricResult) -> some View {
+        let text = lyric.formattedLyrics(options: store.lyricOptions)
+        return HStack(spacing: 14) {
+            Image(systemName: "text.alignleft")
+                .font(.title2)
+                .foregroundStyle(.tertiary)
+                .frame(width: 56, height: 56)
+                .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 5))
+            VStack(alignment: .leading, spacing: 5) {
+                Text(lyric.trackName).fontWeight(.medium).lineLimit(1)
+                Text([lyric.artistName, lyric.albumName].compactMap { $0 }.joined(separator: " · "))
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(LookupSource.lrclib.name).font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 10)
+            Button("预览歌词") {
+                preview = LyricPreview(id: "lrclib:\(lyric.id)", title: "\(lyric.trackName) · \(LookupSource.lrclib.name)", text: text)
+                message = "已获取歌词，请预览后应用"
+            }
+            .controlSize(.small)
+            .disabled(pending || store.busy || text.isEmpty)
+            .accessibilityIdentifier("lookup.previewLyrics")
+        }
+    }
+
     private func cancel() { operationID = UUID(); task?.cancel(); task = nil; pending = false }
     private func run(_ status: String, operation: @escaping @MainActor (UUID) async throws -> Void) {
         cancel()
@@ -163,16 +202,26 @@ struct LookupView: View {
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !pending else { return }
         let selectedSource = source, selectedCountry = country
-        songs = []; lyrics = []; selectedLyric = nil
-        run("正在搜索 \(selectedSource.name)…") { id in
+        let aggregateSources = store.aggregateSources
+        results = []; lyrics = []; selectedLyric = nil
+        run("正在搜索 \(selectedSource?.name ?? "聚合来源")…") { id in
             if selectedSource == .lrclib {
-                let results = try await OnlineLookup.lyrics(query: text, session: lookupSession)
+                let matches = try await OnlineLookup.lyrics(query: text, session: lookupSession)
                 guard isCurrent(id) else { return }
-                lyrics = results; message = results.isEmpty ? "没有找到歌词，可以调整关键词" : "找到 \(results.count) 份歌词"
+                lyrics = matches; message = matches.isEmpty ? "没有找到歌词，可以调整关键词" : "找到 \(matches.count) 份歌词"
+            } else if let selectedSource {
+                let matches = try await OnlineLookup.songs(query: text, country: selectedCountry, source: selectedSource, session: lookupSession)
+                guard isCurrent(id) else { return }
+                results = matches.map(LookupResult.song)
+                message = matches.isEmpty ? "没有找到结果，可以调整关键词或来源" : "\(selectedSource.name)找到 \(matches.count) 个结果；请核对后应用"
             } else {
-                let results = try await OnlineLookup.songs(query: text, country: selectedCountry, source: selectedSource, session: lookupSession)
+                let response = try await OnlineLookup.aggregate(query: text, country: selectedCountry, sources: aggregateSources, session: lookupSession)
                 guard isCurrent(id) else { return }
-                songs = results; message = results.isEmpty ? "没有找到结果，可以调整关键词或来源" : "\(selectedSource.name)找到 \(results.count) 个结果；请核对后应用"
+                results = response.results
+                message = results.isEmpty ? "没有找到结果" : "找到 \(results.count) 个结果"
+                if !response.failedSources.isEmpty {
+                    message += "；搜索失败：\(response.failedSources.map(\.name).joined(separator: "、"))"
+                }
             }
         }
     }
@@ -189,7 +238,7 @@ struct LookupView: View {
         let options = store.lyricOptions
         run("正在获取 \(song.source.name)的可用内容…") { id in
             let result = try await OnlineLookup.catalogResult(for: song, options: options, session: lookupSession)
-            guard isCurrent(id), store.showLookup, source == song.source else { return }
+            guard isCurrent(id), store.showLookup else { return }
             let targets = store.tracks.filter { targetIDs.contains($0.id) && $0.writable }
             let formats = Dictionary(uniqueKeysWithValues: targets.map { ($0.id, $0.format) })
             let updated = store.mutateTracks(targetIDs: targetIDs) { trackID, tags in

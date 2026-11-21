@@ -101,6 +101,41 @@ private final class StubProtocol: URLProtocol {
         print("PASS request headers, Unicode/special-character escaping, detail POST and transport errors")
         try await testBatchLookup(session: session)
         try await testKugouRequests(session: session)
+        try await testAggregateLookup(session: session)
+    }
+
+    private static func testAggregateLookup(session: URLSession) async throws {
+        let qqRows: [[String: Any]] = [
+            ["id": 2, "name": "周杰伦晴天现场版"],
+            ["id": 1, "name": "晴天", "singer": [["name": "周杰伦"]]]
+        ]
+        let qq = try json(["code": 0, "req_0": ["data": ["body": ["song": ["list": qqRows]]]]])
+        let kugou = try json(["status": 1, "error_code": 0, "data": ["lists": [OnlineLookup.Object]()]])
+        let itunesRows: [OnlineLookup.Object] = [["trackId": 1, "trackName": "晴天", "artistName": "周杰伦"]]
+        let itunes = try json(["results": itunesRows])
+        let lrclibRows: [OnlineLookup.Object] = [
+            ["id": 1, "trackName": "晴天", "artistName": "周杰伦", "plainLyrics": "歌词"],
+            ["id": 1, "trackName": "晴天", "artistName": "周杰伦", "plainLyrics": "重复结果"]
+        ]
+        let lrclib = try JSONSerialization.data(withJSONObject: lrclibRows)
+        StubProtocol.handler = { request in
+            switch request.url?.host {
+            case "u.y.qq.com": return (200, qq)
+            case "music.163.com": return (503, Data())
+            case "songsearch.kugou.com": return (200, kugou)
+            case "itunes.apple.com": return (200, itunes)
+            case "lrclib.net": return (200, lrclib)
+            default: throw AppError.message("unexpected aggregate endpoint")
+            }
+        }
+        for query in ["周杰伦 晴天", "晴天 周杰伦", "周杰伦晴天"] {
+            let response = try await OnlineLookup.aggregate(query: query, sources: Set(LookupSource.allCases), session: session)
+            try expect(response.results.map(\.id) == ["qq:1", "itunes:1", "lrclib:1", "qq:2"], "aggregate keyword ranking, stable order, qualified identity and duplicate handling")
+            try expect(response.failedSources == [.netease], "failed sources distinguished from successful empty providers")
+        }
+        let response = try await OnlineLookup.aggregate(query: "晴天", sources: [.lrclib], session: session)
+        try expect(response.results.map(\.id) == ["lrclib:1"] && response.failedSources.isEmpty, "aggregate uses selected sources")
+        print("PASS aggregate ranking, stable provider order, mixed results, selected sources and partial failure")
     }
 
     private static func testKugouLyrics() throws {
