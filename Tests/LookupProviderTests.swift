@@ -68,26 +68,7 @@ private final class StubProtocol: URLProtocol {
         print("PASS WEAPI two AES-CBC stages / PKCS7 / Base64 / raw RSA against independent vector")
         let configuration = URLSessionConfiguration.ephemeral; configuration.protocolClasses = [StubProtocol.self]
         let session = URLSession(configuration: configuration); defer { session.invalidateAndCancel() }
-        StubProtocol.handler = { request in
-            try expect(request.url?.scheme == "https" && request.value(forHTTPHeaderField: "Referer") == "https://i.y.qq.com/", "QQ request headers")
-            let data = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!.first { $0.name == "data" }!.value!
-            try expect(!request.url!.absoluteString.contains(":" + "0"), "QQ JSON query encoding")
-            let payload = try OnlineLookup.object(Data(data.utf8)); let req = payload["req_0"] as! [String: Any]; let param = req["param"] as! [String: Any]
-            try expect(param["query"] as? String == "A\"B\\C & 中文+", "QQ JSON/query escaping")
-            try expect(param["num_per_page"] as? Int == 20, "QQ supported page size")
-            return (200, qqFixture)
-        }
-        let songs = try await OnlineLookup.songs(query: "A\"B\\C & 中文+", source: .qq, session: session)
-        try expect(songs.count == 1, "QQ request parse")
-        let legacyFixture = try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1]).appendingPathComponent("qq-legacy-search.json"))
-        StubProtocol.handler = { request in
-            if request.url?.host == "u.y.qq.com" { return (200, try json(["code": 0, "req_0": ["code": 2001]])) }
-            try expect(request.url?.host == "c.y.qq.com", "QQ fallback host")
-            return (200, legacyFixture)
-        }
-        let fallback = try await OnlineLookup.songs(query: "周杰伦 晴天", source: .qq, session: session)[0]
-        try expect(fallback.trackName == qq.trackName && fallback.trackId == qq.trackId && fallback.artworkURL == qq.artworkURL && fallback.trackNumber == 3 && fallback.discNumber == 1 && fallback.releaseDate == "2003-07-31", "QQ fallback identities / date / numbering")
-        print("PASS QQ 2001 fallback: real legacy fixture, stable identities and metadata")
+        try await testQQSearch(session: session, desktopSong: qq)
         StubProtocol.handler = { request in
             try expect(request.httpMethod == "POST" && request.url?.path == "/weapi/v3/song/detail" && request.value(forHTTPHeaderField: "Content-Type") == "application/x-www-form-urlencoded", "NetEase detail transport")
             return (200, try json(detail))
@@ -104,12 +85,78 @@ private final class StubProtocol: URLProtocol {
         try await testAggregateLookup(session: session)
     }
 
+    private static func testQQSearch(session: URLSession, desktopSong: CatalogSong) async throws {
+        let liveQuery = "糖妹/安崎/炎明熹 我的骄傲 (Live)"
+        let specialQuery = #"A"B\C & 中文+"#
+        let liveRow: [String: Any] = [
+            "songid": 361250065, "songmid": "0010BQDD2bOrMw", "songname": "我的骄傲 (Live)",
+            "singer": ["糖妹", "安崎", "炎明熹"].map { ["name": $0] }, "albumname": "声生不息 第10期",
+            "albummid": "000MA98a3K9N1h", "pubtime": 1656172800, "interval": 240
+        ]
+        let liveResponse = try json(["code": 0, "data": ["song": ["list": [liveRow]]]])
+        let legacyFixture = try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1]).appendingPathComponent("qq-legacy-search.json"))
+        StubProtocol.handler = { request in
+            guard let url = request.url else { throw URLError(.badURL) }
+            try expect(url.scheme == "https" && url.host == "c.y.qq.com"
+                       && url.path == "/soso/fcgi-bin/search_for_qq_cp"
+                       && request.httpMethod == "GET" && request.value(forHTTPHeaderField: "Referer") == "https://i.y.qq.com/", "QQ H5 transport")
+            let parts = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            let params = Dictionary(uniqueKeysWithValues: (parts?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+            try expect(params["p"] == "1" && params["n"] == "20" && params["format"] == "json", "QQ H5 result options")
+            switch params["w"] {
+            case liveQuery: return (200, liveResponse)
+            case "周杰伦 晴天": return (200, legacyFixture)
+            case specialQuery:
+                try expect(parts?.percentEncodedQuery?.contains("%2B") == true, "QQ H5 encodes literal plus")
+                return (200, legacyFixture)
+            default: throw AppError.message("QQ H5 did not preserve the search query")
+            }
+        }
+        let normal = try await OnlineLookup.songs(query: "周杰伦 晴天", source: .qq, session: session)
+        try expect(normal.first?.trackId == desktopSong.trackId && normal.first?.artworkURL == desktopSong.artworkURL, "QQ uses stable song and album identities")
+        let special = try await OnlineLookup.songs(query: specialQuery, source: .qq, session: session)
+        try expect(special.count == 1, "QQ H5 special-character query")
+        let liveResults = try await OnlineLookup.songs(query: liveQuery, source: .qq, session: session)
+        guard let live = liveResults.first else { throw AppError.message("QQ live result missing") }
+        try expect(live.trackId == 361250065 && live.songMid == "0010BQDD2bOrMw" && live.trackName == "我的骄傲 (Live)"
+                   && live.artistName == "糖妹/安崎/炎明熹" && live.collectionName == "声生不息 第10期"
+                   && live.artworkURL?.lastPathComponent == "T002R800x800M000000MA98a3K9N1h.jpg" && live.duration == 240,
+                   "QQ H5 live track and album identities")
+        let aggregated = try await OnlineLookup.aggregate(query: liveQuery, sources: [.qq], session: session)
+        try expect(aggregated.results.first?.id == live.id && aggregated.failedSources.isEmpty, "QQ H5 live query works in aggregate mode")
+        let trackInfo: [String: Any] = ["id": live.trackId, "mid": "0010BQDD2bOrMw", "genre": 1,
+                                        "index_cd": 0, "index_album": 7, "time_public": "2022-06-26"]
+        for valid in [true, false] {
+            var row = trackInfo
+            if !valid { row["mid"] = "unrelated-track" }
+            let result: [String: Any] = ["code": 0, "data": ["track_info": row]]
+            let detailResponse = try json(["code": 0, "req_0": result])
+            StubProtocol.handler = { request in
+                let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+                let requestData = components?.queryItems?.first { $0.name == "data" }?.value ?? ""
+                let root = try OnlineLookup.object(Data(requestData.utf8))
+                let service = root["req_0"] as? [String: Any]
+                let params = service?["param"] as? [String: Any]
+                guard components?.host == "u.y.qq.com", service?["method"] as? String == "get_song_detail_yqq",
+                      params?["song_id"] as? Int == live.trackId else {
+                    throw AppError.message("Unexpected QQ detail request")
+                }
+                return (200, detailResponse)
+            }
+            let detail = try await OnlineLookup.details(live, session: session)
+            try expect(detail.trackName == live.trackName && detail.artworkURL == live.artworkURL, "QQ details preserve the selected result")
+            try expect(detail.trackNumber == (valid ? 7 : nil) && detail.discNumber == (valid ? 1 : nil)
+                       && detail.primaryGenreName == (valid ? "Pop" : nil), "QQ details enrich matching results only")
+        }
+        print("PASS QQ H5 search: exact Live query, escaping, aggregate integration, song identity and detail enrichment")
+    }
+
     private static func testAggregateLookup(session: URLSession) async throws {
         let qqRows: [[String: Any]] = [
-            ["id": 2, "name": "周杰伦晴天现场版"],
-            ["id": 1, "name": "晴天", "singer": [["name": "周杰伦"]]]
+            ["songid": 2, "songname": "周杰伦晴天现场版"],
+            ["songid": 1, "songname": "晴天", "singer": [["name": "周杰伦"]]]
         ]
-        let qq = try json(["code": 0, "req_0": ["data": ["body": ["song": ["list": qqRows]]]]])
+        let qq = try json(["code": 0, "data": ["song": ["list": qqRows]]])
         let kugou = try json(["status": 1, "error_code": 0, "data": ["lists": [OnlineLookup.Object]()]])
         let itunesRows: [OnlineLookup.Object] = [["trackId": 1, "trackName": "晴天", "artistName": "周杰伦"]]
         let itunes = try json(["results": itunesRows])
@@ -120,7 +167,7 @@ private final class StubProtocol: URLProtocol {
         let lrclib = try JSONSerialization.data(withJSONObject: lrclibRows)
         StubProtocol.handler = { request in
             switch request.url?.host {
-            case "u.y.qq.com": return (200, qq)
+            case "c.y.qq.com": return (200, qq)
             case "music.163.com": return (503, Data())
             case "songsearch.kugou.com": return (200, kugou)
             case "itunes.apple.com": return (200, itunes)
@@ -242,8 +289,8 @@ private final class StubProtocol: URLProtocol {
         let lyric = "[00:01.00]First song"
         let translation = "[00:01.00]第一首歌"
         func song(_ id: Int, _ title: String, _ artist: String, _ album: String, _ duration: Int) -> [String: Any] {
-            ["id": id, "mid": String(id), "title": title, "singer": artist.components(separatedBy: "/").map { ["name": $0] },
-             "album": ["title": album, "mid": "Cover\(id)"], "interval": duration]
+            ["songid": id, "songmid": String(id), "songname": title, "singer": artist.components(separatedBy: "/").map { ["name": $0] },
+             "albumname": album, "albummid": "Cover\(id)", "interval": duration]
         }
         let rows = [song(1, "First", "Other Artist", "Original", 180),
                     song(2, "First", "Artist A", "Original", 210),
@@ -259,8 +306,7 @@ private final class StubProtocol: URLProtocol {
                     song(12, "Third (Live)", "Artist C", "Third Album", 180),
                     song(13, "Third（现场版）", "Artist C", "Third Album", 180),
                     song(14, "Fourth (Live)", "Artist D", "Fourth Album", 0)]
-        let payload: [String: Any] = ["code": 0, "data": ["body": ["song": ["list": rows]]]]
-        let response = try json(["code": 0, "req_0": payload])
+        let response = try json(["code": 0, "data": ["song": ["list": rows]]])
         StubProtocol.handler = { request in
             let url = request.url!
             switch url.host {
@@ -268,7 +314,7 @@ private final class StubProtocol: URLProtocol {
                 let data = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "data" }?.value
                 let root = try OnlineLookup.object(Data((data ?? "").utf8))
                 guard let service = root["req_0"] as? [String: Any],
-                      service["module"] as? String == "music.musichallSong.PlayLyricInfo" else { return (200, response) }
+                      service["module"] as? String == "music.musichallSong.PlayLyricInfo" else { return (503, Data()) }
                 let param = service["param"] as? [String: Any]
                 try expect(service["method"] as? String == "GetPlayLyricInfo" && param?["crypt"] as? Int == 0 && param?["qrc"] as? Int == 0, "QQ requests unencrypted LRC")
                 let id = (param?["songMid"] as? String).flatMap(Int.init)
@@ -290,6 +336,7 @@ private final class StubProtocol: URLProtocol {
                 return (200, try json(["code": 0, "req_0": result]))
             case "y.qq.com": return url.path.contains("Cover3") ? (200, cover) : (200, Data("invalid image".utf8))
             case "c.y.qq.com":
+                if url.path == "/soso/fcgi-bin/search_for_qq_cp" { return (200, response) }
                 let mid = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "songmid" }?.value
                 if mid == "3" { throw AppError.message("Unexpected legacy lyric request") }
                 if mid == "12" { return (200, try json(["code": 0, "lyric": lyric, "trans": translation])) }

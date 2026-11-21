@@ -126,7 +126,7 @@ bash scripts/prepare-ui-fixtures.sh  # 也可指定一个尚不存在的目录
 
 先用 `--build-only` 生成测试 App，运行 `open '<输出的 Test app 路径>' --args --ui-test-session '<样本脚本输出的 UUID>'`；重启验收时复用同一个 UUID。用文件面板导入打印的 `Music` 目录，依次检查切歌、多选、标签编辑、撤销、封面和歌词导入、保存、关闭后重开、重命名与移除；拖放及不同窗口尺寸的视觉效果需另做交互验收，未包含在上述自动用例中。样本根目录的 `manifest.json` 记录原始音频哈希；勿用个人音乐作为验收样本。
 
-也可以通过 `FFMPEG`、`FFPROBE` 环境变量指定工具的绝对路径。在线接口测试单独执行，会向公开服务发送固定的测试关键词 `周杰伦 晴天`、`陈奕迅 十年`、`The Beatles Yesterday` 和 `Adele Hello`：
+也可以通过 `FFMPEG`、`FFPROBE` 环境变量指定工具的绝对路径。在线接口测试单独执行，会向公开服务发送固定的测试关键词 `周杰伦 晴天`、`糖妹/安崎/炎明熹 我的骄傲 (Live)`、`陈奕迅 十年`、`The Beatles Yesterday` 和 `Adele Hello`：
 
 ```bash
 ./scripts/test-lookup.sh  # 歌词格式化、离线来源解析、加密向量、错误及兼容接口测试

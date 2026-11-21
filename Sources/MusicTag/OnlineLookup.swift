@@ -196,19 +196,8 @@ enum OnlineLookup {
     static func songs(query: String, country: String = "CN", source: LookupSource = .itunes, session: URLSession = .shared) async throws -> [CatalogSong] {
         switch source {
         case .qq:
-            let param: Object = ["search_type": 0, "query": query, "page_num": 1, "num_per_page": 20]
-            let search: Object = ["method": "DoSearchForQQMusicDesktop", "module": "music.search.SearchCgiService", "param": param]
-            let payload: Object = ["req_0": search]
-            let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
-            let request = request(url("https://u.y.qq.com/cgi-bin/musicu.fcg", ["data": String(decoding: data, as: UTF8.self)]), source: source)
-            do { return try parseSongs(await fetch(request, session: session), source: source) }
-            catch {
-                try Task.checkCancellation()
-                // The shipped desktop endpoint can reject current clients with 2001.
-                // Keep a second public QQ endpoint with the same song/album identities.
-                let fallback = self.request(url("https://c.y.qq.com/soso/fcgi-bin/client_search_cp", ["w": query, "p": "1", "n": "20", "format": "json"]), source: source)
-                return try parseSongs(await fetch(fallback, session: session), source: source)
-            }
+            let endpoint = url("https://c.y.qq.com/soso/fcgi-bin/search_for_qq_cp", ["w": query, "p": "1", "n": "20", "format": "json"])
+            return try parseSongs(await fetch(request(endpoint, source: source), session: session), source: source)
         case .netease:
             let request = try neteaseRequest(path: "/weapi/cloudsearch/pc", payload: ["s": query, "type": 1, "limit": 25, "total": true, "offset": 0, "csrf_token": ""])
             return try parseSongs(await fetch(request, session: session), source: source)
@@ -225,12 +214,42 @@ enum OnlineLookup {
     }
 
     static func details(_ song: CatalogSong, session: URLSession = .shared) async throws -> CatalogSong {
+        if song.source == .qq {
+            do {
+                return try await qqDetails(song, session: session)
+            } catch {
+                try Task.checkCancellation()
+                return song
+            }
+        }
         guard song.source == .netease else { return song }
         let c = String(decoding: try JSONSerialization.data(withJSONObject: [["id": song.trackId, "v": 0]], options: [.sortedKeys]), as: UTF8.self)
         let request = try neteaseRequest(path: "/weapi/v3/song/detail", payload: ["c": c, "csrf_token": ""])
         let rows = try parseSongs(await fetch(request, session: session), source: .netease)
         guard let detail = rows.first(where: { $0.trackId == song.trackId }) else { throw AppError.message("网易云音乐未返回这首歌的详情") }
         return detail
+    }
+
+    private static func qqDetails(_ song: CatalogSong, session: URLSession) async throws -> CatalogSong {
+        let client: Object = ["ct": 24, "cv": 4747474, "platform": "yqq.json", "g_tk": 5381]
+        let service: Object = ["module": "music.pf_song_detail_svr", "method": "get_song_detail_yqq", "param": ["song_id": song.trackId]]
+        let data = try JSONSerialization.data(withJSONObject: ["comm": client, "req_0": service], options: [.sortedKeys])
+        let endpoint = url("https://u.y.qq.com/cgi-bin/musicu.fcg", ["data": String(decoding: data, as: UTF8.self)])
+        let root = try object(await fetch(request(endpoint, source: .qq), session: session))
+        try checkCode(root, source: .qq)
+        guard let response = root["req_0"] as? Object else { throw invalid(.qq) }
+        try checkCode(response, source: .qq)
+        guard let payload = response["data"] as? Object, let row = payload["track_info"] as? Object,
+              positive(row["id"]) == song.trackId, song.songMid == nil || string(row["mid"]) == song.songMid else {
+            throw invalid(.qq)
+        }
+        let detail = qqSong(row, id: song.trackId)
+        var enriched = song
+        enriched.primaryGenreName = detail.primaryGenreName ?? song.primaryGenreName
+        enriched.trackNumber = detail.trackNumber ?? song.trackNumber
+        enriched.discNumber = detail.discNumber ?? song.discNumber
+        enriched.releaseDate = detail.releaseDate ?? song.releaseDate
+        return enriched
     }
 
     static func lyrics(query: String, session: URLSession = .shared) async throws -> [LyricResult] {
@@ -379,6 +398,25 @@ enum OnlineLookup {
             .map(normalized).filter { !$0.isEmpty })
     }
 
+    private static func qqSong(_ row: Object, id: Int) -> CatalogSong {
+        var song = CatalogSong(source: .qq, trackId: id)
+        let album = row["album"] as? Object ?? [:]
+        song.trackName = string(row["title"]) ?? string(row["name"])
+        song.artistName = names(row["singer"])
+        song.collectionName = string(album["title"]) ?? string(album["name"])
+        song.duration = positive(row["interval"]).map(Double.init)
+        song.releaseDate = string(row["time_public"])
+        song.trackNumber = positive(row["index_album"])
+        // QQ's index_cd is zero based (0 is the first disc).
+        song.discNumber = integer(row["index_cd"]).flatMap { $0 >= 0 ? $0 + 1 : nil }
+        let genres = ["Pop", "Classical", "Jazz", "Rock", "Electronic", "Latin", "Easy Listening", "New Age", "World Music", "Rap", "Soundtrack", "Country", "Dance", "R&B", "Folk", "Metal", "Blues", "Alternative", "Religious"]
+        if let genre = integer(row["genre"]), (1...genres.count).contains(genre) { song.primaryGenreName = genres[genre - 1] }
+        if let mid = string(album["mid"]) { song.artworkUrl100 = "https://y.qq.com/music/photo_new/T002R800x800M000\(mid).jpg" }
+        song.songMid = string(row["mid"])
+        if let mid = song.songMid { song.trackViewUrl = "https://y.qq.com/n/ryqq/songDetail/\(mid)" }
+        return song
+    }
+
     static func parseSongs(_ data: Data, source: LookupSource) throws -> [CatalogSong] {
         let root = try object(data)
         try checkCode(root, source: source)
@@ -431,20 +469,7 @@ enum OnlineLookup {
             var song = CatalogSong(source: source, trackId: id)
             switch source {
             case .qq:
-                let album = row["album"] as? Object ?? [:]
-                song.trackName = string(row["title"]) ?? string(row["name"])
-                song.artistName = names(row["singer"])
-                song.collectionName = string(album["title"]) ?? string(album["name"])
-                song.duration = positive(row["interval"]).map(Double.init)
-                song.releaseDate = string(row["time_public"])
-                song.trackNumber = positive(row["index_album"])
-                // QQ's index_cd is zero based (0 is the first disc).
-                song.discNumber = integer(row["index_cd"]).flatMap { $0 >= 0 ? $0 + 1 : nil }
-                let genres = ["Pop", "Classical", "Jazz", "Rock", "Electronic", "Latin", "Easy Listening", "New Age", "World Music", "Rap", "Soundtrack", "Country", "Dance", "R&B", "Folk", "Metal", "Blues", "Alternative", "Religious"]
-                if let genre = integer(row["genre"]), (1...genres.count).contains(genre) { song.primaryGenreName = genres[genre - 1] }
-                if let mid = string(album["mid"]) { song.artworkUrl100 = "https://y.qq.com/music/photo_new/T002R800x800M000\(mid).jpg" }
-                song.songMid = string(row["mid"])
-                if let mid = song.songMid { song.trackViewUrl = "https://y.qq.com/n/ryqq/songDetail/\(mid)" }
+                return qqSong(row, id: id)
             case .netease:
                 let album = row["al"] as? Object ?? row["album"] as? Object ?? [:]
                 song.trackName = string(row["name"])

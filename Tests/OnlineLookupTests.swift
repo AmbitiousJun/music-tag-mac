@@ -26,6 +26,22 @@ import Foundation
             } catch { failures.append("\(source.name): \(error.localizedDescription)"); print("FAIL \(failures.last!)") }
         }
         do {
+            let query = "糖妹/安崎/炎明熹 我的骄傲 (Live)"
+            let aggregate = try await OnlineLookup.aggregate(query: query, sources: [.qq])
+            guard aggregate.failedSources.isEmpty,
+                  case .song(let match)? = aggregate.results.first(where: { $0.id == "qq:361250065" }),
+                  match.trackName == "我的骄傲 (Live)", match.artistName == "糖妹/安崎/炎明熹",
+                  match.collectionName == "声生不息 第10期" else {
+                throw AppError.message("No exact live recording in QQ results")
+            }
+            let detail = try await OnlineLookup.details(match)
+            let lyrics = try await OnlineLookup.lyrics(for: match)
+            guard detail.trackNumber == 7, detail.discNumber == 1, lyrics.contains("["), lyrics.count > 100 else {
+                throw AppError.message("Missing live track details or synchronized lyrics")
+            }
+            print("PASS QQ 音乐: live recording and all three artists returned by aggregate search; verified detail and lyric identity")
+        } catch { failures.append("QQ 音乐现场版: \(error.localizedDescription)"); print("FAIL \(failures.last!)") }
+        do {
             let lyrics = try await OnlineLookup.lyrics(query: "The Beatles Yesterday")
             guard lyrics.contains(where: { !$0.lyrics.isEmpty }) else { throw AppError.message("No usable lyrics") }
             print("PASS LRCLIB: HTTPS search and lyric decoding (\(lyrics.count) results)")
