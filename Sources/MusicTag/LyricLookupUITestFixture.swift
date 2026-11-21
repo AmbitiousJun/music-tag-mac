@@ -10,7 +10,7 @@ enum LyricLookupUITestFixture {
     }()
 
     private final class FixtureProtocol: URLProtocol {
-        private let songMids = ["fixture-1", "fixture-2", "fixture-3"]
+        private let songMids = ["fixture-1", "fixture-2", "fixture-3", "fixture-apply-all"]
 
         override class func canInit(with request: URLRequest) -> Bool { true }
         override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -18,12 +18,23 @@ enum LyricLookupUITestFixture {
         override func startLoading() {
             do {
                 guard let url = request.url,
-                      let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-                      let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1",
-                                                    headerFields: ["Content-Type": "application/json"]) else {
+                      let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
                     throw URLError(.badURL)
                 }
-                let body = try JSONSerialization.data(withJSONObject: payload(for: components))
+                let isArtwork = components.host == "y.qq.com"
+                    && components.path == "/music/photo_new/T002R800x800M000fixture-apply-all.jpg"
+                let body: Data
+                if isArtwork {
+                    // A 24 × 18 PNG, with dimensions distinct from the local 32 × 32 cover.
+                    body = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAABgAAAASCAIAAADOjonJAAAAG0lEQVR4nGOYwNFMFcQwatCoQaMGjRo03AwCAAF43aBdbjGIAAAAAElFTkSuQmCC")!
+                } else {
+                    body = try JSONSerialization.data(withJSONObject: payload(for: components))
+                }
+                let contentType = isArtwork ? "image/png" : "application/json"
+                guard let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1",
+                                                      headerFields: ["Content-Type": contentType]) else {
+                    throw URLError(.badURL)
+                }
                 client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
                 client?.urlProtocol(self, didLoad: body)
                 client?.urlProtocolDidFinishLoading(self)
@@ -54,6 +65,14 @@ enum LyricLookupUITestFixture {
                         "lyric": Data(original.utf8).base64EncodedString(),
                         "trans": Data(translation.utf8).base64EncodedString()
                     ]]]
+                }
+                if body.req_0.param.query == "Apply All Fixture" {
+                    let rows: [[String: Any]] = [[
+                        "id": 4, "mid": "fixture-apply-all", "name": "Online Title",
+                        "singer": [["name": "Online Artist"]],
+                        "album": ["name": "Online Album", "mid": "fixture-apply-all"]
+                    ]]
+                    return ["code": 0, "req_0": ["data": ["body": ["song": ["list": rows]]]]]
                 }
                 let song = ["First Song", "Second Song", "Third Song"].enumerated()
                     .first { body.req_0.param.query == "Artist \($0.offset + 1) \($0.element)" }
