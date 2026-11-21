@@ -11,6 +11,7 @@ enum LyricLookupUITestFixture {
 
     private final class FixtureProtocol: URLProtocol {
         private let songMids = ["fixture-1", "fixture-2", "fixture-3", "fixture-apply-all"]
+        private let verifiesBatchPriority = ProcessInfo.processInfo.environment["MUSICTAG_UI_TEST_AGGREGATE_PRIORITY"] == "1"
 
         override class func canInit(with request: URLRequest) -> Bool { true }
         override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -107,6 +108,11 @@ enum LyricLookupUITestFixture {
                         "songid": 1, "songmid": "fixture-1", "songname": "Fixture Loose Match",
                         "singer": [["name": "Other Artist"]], "albumname": "Other Album"
                     ]]
+                case "Aggregate Priority":
+                    rows = [[
+                        "songid": 1, "songmid": "fixture-1", "songname": query,
+                        "singer": [["name": "QQ Fixture Artist"]]
+                    ]]
                 case "Apply All Fixture":
                     rows = [[
                         "songid": 4, "songmid": "fixture-apply-all", "songname": "Online Title",
@@ -121,7 +127,8 @@ enum LyricLookupUITestFixture {
                         return [[
                             "songid": number, "songmid": "fixture-\(number)", "songname": match.element,
                             "singer": [["name": "Artist \(number)"]],
-                            "albumname": "Original Album \(number)", "interval": 20
+                            "albumname": verifiesBatchPriority ? "QQ Fixture Album \(number)" : "Original Album \(number)",
+                            "interval": 20
                         ]]
                     } ?? []
                 }
@@ -133,11 +140,17 @@ enum LyricLookupUITestFixture {
                                                "Singers": [["name": "Kugou Artist"]], "AlbumName": "Kugou Album"]
                     return ["status": 1, "error_code": 0, "data": ["lists": [row]]]
                 }
+                if query == "Aggregate Priority" {
+                    let row: [String: Any] = ["ID": "1", "SongName": query,
+                                               "Singers": [["name": "Kugou Fixture Artist"]]]
+                    return ["status": 1, "error_code": 0, "data": ["lists": [row]]]
+                }
                 let songs = ["First Song", "Second Song", "Third Song"]
                 let rows: [[String: Any]] = songs.enumerated().compactMap { index, title in
                     let number = index + 1
                     let artist = "Artist \(number)"
                     guard query == "\(artist) \(title)" else { return nil }
+                    if verifiesBatchPriority && number == 2 { return nil }
                     return [
                         "ID": "\(number)", "SongName": title, "Singers": [["name": artist]],
                         "AlbumName": "Kugou Album \(number)", "PublishDate": "2024-01-08",

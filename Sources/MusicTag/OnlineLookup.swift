@@ -61,13 +61,13 @@ struct CatalogSong: Identifiable {
 }
 
 struct BatchLookupResult {
-    let song: CatalogSong
+    let song: CatalogSong?
     let artwork: Data?
     let lyrics: String?
 
     func applying(to tags: inout AudioTags, fallback: CatalogSong? = nil, format: String? = nil) {
         fallback?.applying(to: &tags)
-        song.applying(to: &tags)
+        song?.applying(to: &tags)
         if let artwork, OnlineLookup.canApplyArtwork(artwork, format: format) { tags.artwork = artwork }
         if let lyrics { tags.lyrics = lyrics }
     }
@@ -111,6 +111,13 @@ enum LookupResult: Identifiable {
         case .lyric(let lyric): return (lyric.trackName, lyric.artistName, lyric.albumName ?? "")
         }
     }
+
+    var duration: Double? {
+        switch self {
+        case .song(let song): return song.duration
+        case .lyric(let lyric): return lyric.duration
+        }
+    }
 }
 
 struct AggregateLookupResponse {
@@ -123,19 +130,12 @@ enum OnlineLookup {
     typealias Object = [String: Any]
     private typealias LookupScore = (coverage: Int, exactness: Int, titleMatches: Int, contiguous: Int)
 
-    static func aggregate(query: String, country: String = "CN", sources: Set<LookupSource>, session: URLSession = .shared) async throws -> AggregateLookupResponse {
-        let selected = LookupSource.allCases.filter(sources.contains)
+    static func aggregate(query: String, country: String = "CN", sources: [LookupSource], session: URLSession = .shared) async throws -> AggregateLookupResponse {
         return try await withThrowingTaskGroup(of: (LookupSource, [LookupResult]?).self) { group in
-            for source in selected {
+            for source in sources {
                 group.addTask {
                     do {
-                        let results: [LookupResult]
-                        if source == .lrclib {
-                            results = try await lyrics(query: query, session: session).map(LookupResult.lyric)
-                        } else {
-                            results = try await songs(query: query, country: country, source: source, session: session).map(LookupResult.song)
-                        }
-                        return (source, results)
+                        return (source, try await searchResults(query: query, country: country, source: source, session: session))
                     } catch {
                         try Task.checkCancellation()
                         return (source, nil)
@@ -148,7 +148,7 @@ enum OnlineLookup {
 
             // Seed the ranking with provider order and each provider's result order,
             // so equally relevant rows never depend on network completion order.
-            let candidates = selected.flatMap { bySource[$0] ?? [] }
+            let candidates = sources.flatMap { bySource[$0] ?? [] }
             let keywords = searchTerms(query)
             let scores = candidates.map { relevance($0, keywords: keywords) }
             let ranked = candidates.indices.sorted { left, right in
@@ -158,9 +158,16 @@ enum OnlineLookup {
             var seen = Set<String>()
             return AggregateLookupResponse(
                 results: ranked.map { candidates[$0] }.filter { seen.insert($0.id).inserted },
-                failedSources: selected.filter { bySource[$0] == nil }
+                failedSources: sources.filter { bySource[$0] == nil }
             )
         }
+    }
+
+    private static func searchResults(query: String, country: String, source: LookupSource, session: URLSession) async throws -> [LookupResult] {
+        if source == .lrclib {
+            return try await lyrics(query: query, session: session).map(LookupResult.lyric)
+        }
+        return try await songs(query: query, country: country, source: source, session: session).map(LookupResult.song)
     }
 
     private static func searchTerms(_ text: String) -> [String] {
@@ -312,6 +319,10 @@ enum OnlineLookup {
     }
 
     static func batchResult(for track: TrackItem, source: LookupSource, options: LyricOptions = LyricOptions(), session: URLSession = .shared) async throws -> BatchLookupResult {
+        try await batchResult(for: track, sources: [source], options: options, session: session)
+    }
+
+    static func batchResult(for track: TrackItem, sources: [LookupSource], options: LyricOptions = LyricOptions(), session: URLSession = .shared) async throws -> BatchLookupResult {
         let filename = track.filenameTags
         let title = track.tags.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let artist = track.tags.artist.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -323,34 +334,61 @@ enum OnlineLookup {
             throw AppError.message("缺少标题或艺术家")
         }
 
-        let songs = try await songs(query: "\(lookupArtist) \(lookupTitle)", source: source, session: session)
-        let artistMatches = songs.filter { artistNames($0.artistName ?? "") == artistKey }
-        func matchesDuration(_ song: CatalogSong, whenUnknown: Bool) -> Bool {
-            guard track.duration.isFinite, track.duration > 0, let duration = song.duration else { return whenUnknown }
+        var failures: [String] = []
+        for source in sources {
+            try Task.checkCancellation()
+            do {
+                let results = try await searchResults(query: "\(lookupArtist) \(lookupTitle)", country: "CN", source: source, session: session)
+                try Task.checkCancellation()
+                let match = try batchMatch(results, track: track, titleKey: titleKey, artistKey: artistKey)
+                switch match {
+                case .song(let song):
+                    return try await catalogResult(for: song, format: track.format, options: options, session: session)
+                case .lyric(let lyric):
+                    let text = lyric.formattedLyrics(options: options)
+                    guard !text.isEmpty else { throw AppError.message("没有可用歌词") }
+                    return BatchLookupResult(song: nil, artwork: nil, lyrics: text)
+                }
+            } catch {
+                try Task.checkCancellation()
+                if sources.count == 1 { throw error }
+                failures.append("\(source.name)：\(error.localizedDescription)")
+            }
+        }
+        throw AppError.message(failures.isEmpty ? "没有可用来源" : failures.joined(separator: "；"))
+    }
+
+    private static func batchMatch(_ results: [LookupResult], track: TrackItem, titleKey: String, artistKey: Set<String>) throws -> LookupResult {
+        var seen = Set<String>()
+        let artistMatches = results.filter {
+            artistNames($0.searchFields.artist) == artistKey && seen.insert($0.id).inserted
+        }
+        func matchesDuration(_ result: LookupResult, whenUnknown: Bool) -> Bool {
+            guard track.duration.isFinite, track.duration > 0, let duration = result.duration else { return whenUnknown }
             return abs(track.duration - duration) <= 4
         }
         let exactMatches = artistMatches.filter {
-            normalized($0.trackName ?? "") == titleKey && matchesDuration($0, whenUnknown: true)
+            normalized($0.searchFields.title) == titleKey && matchesDuration($0, whenUnknown: true)
         }
         let album = normalized(track.tags.album)
-        let candidates: [CatalogSong]
+        let candidates: [LookupResult]
         if exactMatches.isEmpty, !album.isEmpty {
             let localBaseTitle = liveBaseTitle(titleKey)
-            candidates = artistMatches.filter { song in
-                let candidateTitle = normalized(song.trackName ?? "")
+            candidates = artistMatches.filter { result in
+                let candidateTitle = normalized(result.searchFields.title)
                 return (liveBaseTitle(candidateTitle) == titleKey || localBaseTitle == candidateTitle)
-                    && normalized(song.collectionName ?? "") == album
-                    && matchesDuration(song, whenUnknown: false)
+                    && normalized(result.searchFields.album) == album
+                    && matchesDuration(result, whenUnknown: false)
             }
         } else {
-            let albumMatches = exactMatches.filter { !album.isEmpty && normalized($0.collectionName ?? "") == album }
+            let albumMatches = exactMatches.filter { !album.isEmpty && normalized($0.searchFields.album) == album }
             candidates = albumMatches.isEmpty ? exactMatches : albumMatches
         }
         guard candidates.count == 1, let song = candidates.first else {
             throw AppError.message(candidates.isEmpty ? "没有可靠匹配" : "找到多个匹配版本")
         }
 
-        return try await catalogResult(for: song, format: track.format, options: options, session: session)
+        return song
     }
 
     static func catalogResult(for song: CatalogSong, format: String? = nil, options: LyricOptions, session: URLSession) async throws -> BatchLookupResult {

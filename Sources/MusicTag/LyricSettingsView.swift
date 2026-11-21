@@ -20,18 +20,39 @@ struct LyricSettingsView: View {
     private var aggregateSettings: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("聚合搜索来源").font(.headline)
-            HStack(spacing: 16) {
-                ForEach(LookupSource.allCases) { source in
-                    Toggle(source.name, isOn: Binding(
-                        get: { store.aggregateSources.contains(source) },
-                        set: { store.setAggregateSource(source, enabled: $0) }
-                    ))
-                    .disabled(store.aggregateSources.count == 1 && store.aggregateSources.contains(source))
-                    .accessibilityIdentifier("lookupSettings.source.\(source.rawValue)")
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(store.aggregateSourceOrder) { source in
+                    HStack(spacing: 8) {
+                        Toggle(source.name, isOn: Binding(
+                            get: { store.aggregateSources.contains(source) },
+                            set: { store.setAggregateSource(source, enabled: $0) }
+                        ))
+                        .disabled(store.aggregateSources.count == 1 && store.aggregateSources.contains(source))
+                        .accessibilityIdentifier("lookupSettings.source.\(source.rawValue)")
+                        .frame(width: 130, alignment: .leading)
+                        Button {
+                            store.moveAggregateSource(source, up: true)
+                        } label: {
+                            Image(systemName: "chevron.up")
+                        }
+                        .disabled(source == store.aggregateSourceOrder.first)
+                        .help("上移\(source.name)")
+                        .accessibilityLabel("上移\(source.name)")
+                        .accessibilityIdentifier("aggregate.moveUp.\(source.rawValue)")
+                        Button {
+                            store.moveAggregateSource(source, up: false)
+                        } label: {
+                            Image(systemName: "chevron.down")
+                        }
+                        .disabled(source == store.aggregateSourceOrder.last)
+                        .help("下移\(source.name)")
+                        .accessibilityLabel("下移\(source.name)")
+                        .accessibilityIdentifier("aggregate.moveDown.\(source.rawValue)")
+                    }
                 }
             }
             .toggleStyle(.checkbox)
-            Text("至少选择一个来源。")
+            Text("至少选择一个来源。批量填充按此顺序匹配，聚合搜索同分结果按此顺序排列。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
