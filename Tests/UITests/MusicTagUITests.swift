@@ -97,23 +97,36 @@ final class MusicTagUITests: XCTestCase {
     func testPlaybackControlsFollowSelection() throws {
         try importFolder()
         let playback = app.toolbars.buttons.matching(identifier: "toolbar.play").firstMatch
+        let markers = fixtures.songs.map { song in
+            table.descendants(matching: .any).matching(identifier: "track.\(song.lastPathComponent).playing").firstMatch
+        }
         func expectAction(_ title: String) throws {
             try waitUntil("Playback action: \(title)") {
                 playback.exists && playback.isEnabled && playback.label == title
             }
         }
+        func expectPlaying(_ index: Int?, timeout: TimeInterval = 10) throws {
+            let filename = index.map { fixtures.songs[$0].lastPathComponent } ?? "none"
+            try waitUntil("Playing marker: \(filename)", timeout: timeout) {
+                markers.indices.allSatisfy { markers[$0].exists == ($0 == index) }
+            }
+        }
 
         try selectSong(0)
         try expectAction("播放试听")
+        try expectPlaying(nil)
         playback.click()
         try expectAction("停止试听")
+        try expectPlaying(0)
 
         try selectSong(1)
         try expectAction("播放试听")
+        try expectPlaying(0)
         try selectSong(0)
         try expectAction("停止试听")
         playback.click()
         try expectAction("播放试听")
+        try expectPlaying(nil)
 
         playback.click()
         try expectAction("停止试听")
@@ -121,14 +134,22 @@ final class MusicTagUITests: XCTestCase {
         try expectAction("播放试听")
         playback.click()
         try expectAction("停止试听")
+        try expectPlaying(1)
         try selectSong(0)
         try expectAction("播放试听")
+        try expectPlaying(1)
         try selectSong(1)
         try expectAction("停止试听")
 
         row(1).rightClick()
         table.menuItems["停止试听"].click()
         try expectAction("播放试听")
+        try expectPlaying(nil)
+
+        playback.click()
+        try expectPlaying(1)
+        try selectSong(0)
+        try expectPlaying(nil, timeout: 25)
     }
 
     func testSortMenuAndBatchLookupSourcePicker() throws {

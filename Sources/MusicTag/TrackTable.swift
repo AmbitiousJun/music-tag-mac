@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 import SwiftUI
 
 /// Keep mouse tracking, keyboard navigation and contextual selection in AppKit.
@@ -65,6 +66,7 @@ struct TrackTable: NSViewRepresentable {
         var store: LibraryStore
         var items: [TrackItem] = []
         var updating = false
+        private var playingTrackID: UUID?
 
         init(store: LibraryStore) { self.store = store }
 
@@ -81,9 +83,18 @@ struct TrackTable: NSViewRepresentable {
             updating = true
             defer { updating = false }
             let visible = store.visible
+            let previousPlayingTrackID = playingTrackID
+            playingTrackID = store.playingTrackID
             if items != visible {
                 items = visible
                 table.reloadData()
+            } else if previousPlayingTrackID != playingTrackID {
+                let titleColumn = table.column(withIdentifier: NSUserInterfaceItemIdentifier("title"))
+                for id in [previousPlayingTrackID, playingTrackID].compactMap({ $0 }) {
+                    guard let row = items.firstIndex(where: { $0.id == id }),
+                          let cell = table.view(atColumn: titleColumn, row: row, makeIfNecessary: false) as? TrackTitleCell else { continue }
+                    cell.setPlaying(id == playingTrackID)
+                }
             }
             let indexes = IndexSet(visible.indices.filter { store.selection.contains(visible[$0].id) })
             if table.selectedRowIndexes != indexes {
@@ -105,7 +116,7 @@ struct TrackTable: NSViewRepresentable {
             if column.identifier.rawValue == "title" {
                 let cell = tableView.makeView(withIdentifier: column.identifier, owner: self) as? TrackTitleCell ?? TrackTitleCell()
                 cell.identifier = column.identifier
-                cell.configure(item)
+                cell.configure(item, isPlaying: item.id == playingTrackID)
                 return cell
             }
             let cell: TrackValueCell
@@ -189,6 +200,7 @@ private final class TrackTitleCell: NSTableCellView {
     private let filenameLabel = NSTextField(labelWithString: "")
     private let dirty = NSTextField(labelWithString: "●")
     private let symbol = NSImageView()
+    private let playbackIndicator = PlaybackIndicator()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -205,7 +217,20 @@ private final class TrackTitleCell: NSTableCellView {
         text.orientation = .vertical
         text.alignment = .leading
         text.spacing = 3
-        let stack = NSStackView(views: [dirty, symbol, text])
+        let icon = NSView()
+        let iconViews: [NSView] = [symbol, playbackIndicator]
+        for view in iconViews {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            icon.addSubview(view)
+            NSLayoutConstraint.activate([
+                view.leadingAnchor.constraint(equalTo: icon.leadingAnchor),
+                view.trailingAnchor.constraint(equalTo: icon.trailingAnchor),
+                view.topAnchor.constraint(equalTo: icon.topAnchor),
+                view.bottomAnchor.constraint(equalTo: icon.bottomAnchor)
+            ])
+        }
+        setPlaying(false)
+        let stack = NSStackView(views: [dirty, icon, text])
         stack.spacing = 8
         stack.alignment = .centerY
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -215,8 +240,8 @@ private final class TrackTitleCell: NSTableCellView {
             stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
             stack.centerYAnchor.constraint(equalTo: centerYAnchor),
             dirty.widthAnchor.constraint(equalToConstant: 5),
-            symbol.widthAnchor.constraint(equalToConstant: 14),
-            symbol.heightAnchor.constraint(equalToConstant: 16)
+            icon.widthAnchor.constraint(equalToConstant: 14),
+            icon.heightAnchor.constraint(equalToConstant: 16)
         ])
         textField = titleLabel
         updateColors()
@@ -224,21 +249,137 @@ private final class TrackTitleCell: NSTableCellView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func configure(_ item: TrackItem) {
+    func configure(_ item: TrackItem, isPlaying: Bool) {
         titleLabel.stringValue = item.title
         filenameLabel.stringValue = item.url.lastPathComponent
         titleLabel.setAccessibilityIdentifier("track.\(item.url.lastPathComponent).title")
         filenameLabel.setAccessibilityIdentifier("track.\(item.url.lastPathComponent).filename")
+        playbackIndicator.setAccessibilityIdentifier("track.\(item.url.lastPathComponent).playing")
+        playbackIndicator.setAccessibilityHelp(item.issue)
+        setPlaying(isPlaying)
         dirty.alphaValue = item.isDirty ? 1 : 0
         symbol.image = NSImage(systemSymbolName: item.issue == nil ? "music.note" : "exclamationmark.triangle", accessibilityDescription: item.issue)
         symbol.contentTintColor = item.issue == nil ? .secondaryLabelColor : .systemOrange
-        toolTip = item.url.path
+        toolTip = [item.url.path, item.issue].compactMap { $0 }.joined(separator: "\n")
+    }
+
+    func setPlaying(_ isPlaying: Bool) {
+        symbol.isHidden = isPlaying
+        playbackIndicator.setAccessibilityElement(isPlaying)
+        playbackIndicator.isHidden = !isPlaying
     }
 
     override var backgroundStyle: NSView.BackgroundStyle { didSet { updateColors() } }
     private func updateColors() {
         titleLabel.textColor = backgroundStyle == .emphasized ? .alternateSelectedControlTextColor : .labelColor
         filenameLabel.textColor = backgroundStyle == .emphasized ? .alternateSelectedControlTextColor : .secondaryLabelColor
+        playbackIndicator.tint = titleLabel.textColor ?? .labelColor
+    }
+}
+
+private final class PlaybackIndicator: NSView {
+    private let bars = [CALayer(), CALayer(), CALayer()]
+    private weak var observedClipView: NSClipView?
+    var tint: NSColor = .labelColor { didSet { updateBarColors() } }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        setAccessibilityRole(.image)
+        setAccessibilityLabel("正在试听")
+        for (index, height) in [6.0, 12.0, 8.0].enumerated() {
+            let bar = bars[index]
+            bar.bounds = CGRect(x: 0, y: 0, width: 3, height: height)
+            bar.anchorPoint = CGPoint(x: 0.5, y: 0)
+            bar.position = CGPoint(x: 2.5 + CGFloat(index) * 4.5, y: 2)
+            bar.cornerRadius = 1.5
+            layer?.addSublayer(bar)
+        }
+        updateBarColors()
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(animationOptionsDidChange(_:)),
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil
+        )
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateVisibility()
+    }
+
+    override func viewDidHide() {
+        super.viewDidHide()
+        updateVisibility()
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        updateVisibility()
+    }
+
+    override func layout() {
+        super.layout()
+        updateAnimation()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateBarColors()
+    }
+
+    private func updateBarColors() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            let color = tint.cgColor
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            for bar in bars { bar.backgroundColor = color }
+            CATransaction.commit()
+        }
+    }
+
+    private func updateVisibility() {
+        let clipView = window != nil && !isHiddenOrHasHiddenAncestor ? enclosingScrollView?.contentView : nil
+        if observedClipView !== clipView {
+            let center = NotificationCenter.default
+            if let observedClipView {
+                center.removeObserver(self, name: NSView.boundsDidChangeNotification, object: observedClipView)
+            }
+            observedClipView = clipView
+            if let clipView {
+                clipView.postsBoundsChangedNotifications = true
+                center.addObserver(self, selector: #selector(animationOptionsDidChange(_:)),
+                                   name: NSView.boundsDidChangeNotification, object: clipView)
+            }
+        }
+        updateAnimation()
+    }
+
+    @objc private func animationOptionsDidChange(_ notification: Notification) {
+        updateAnimation()
+    }
+
+    private func updateAnimation() {
+        let key = "playback.level"
+        guard window != nil, !isHiddenOrHasHiddenAncestor, !visibleRect.isEmpty,
+              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            for bar in bars { bar.removeAnimation(forKey: key) }
+            return
+        }
+        guard bars[0].animation(forKey: key) == nil else { return }
+        let scales = [[1.0, 1.8, 0.65, 1.4, 1.0],
+                      [1.0, 0.45, 0.8, 0.55, 1.0],
+                      [1.0, 0.6, 1.45, 0.8, 1.0]]
+        for (bar, levels) in zip(bars, scales) {
+            let animation = CAKeyframeAnimation(keyPath: "transform.scale.y")
+            animation.values = levels
+            animation.duration = 0.9
+            animation.repeatCount = .infinity
+            bar.add(animation, forKey: key)
+        }
     }
 }
 
