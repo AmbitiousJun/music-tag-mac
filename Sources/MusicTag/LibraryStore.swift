@@ -65,7 +65,7 @@ struct TagField: Identifiable {
     @Published var alert: String?
     @Published var showLookup = false
     @Published var showRename = false
-    @Published private var playingTrackID: UUID?
+    @Published private(set) var playingTrackID: UUID?
     @Published var lyricOptions: LyricOptions {
         didSet {
             if let data = try? JSONEncoder().encode(lyricOptions) {
