@@ -402,11 +402,73 @@ final class MusicTagUITests: XCTestCase {
         XCTAssertEqual(try requestedLookupSources(), ["lrclib"])
     }
 
-    private func launchWithLookupRequestRecording() throws {
+    func testAggregateSearchBreaksTiesUsingSavedSourceOrder() throws {
+        try launchWithLookupRequestRecording()
+        try importFolder()
+        try selectSong(0)
+        try searchAggregateFixture("Aggregate Priority")
+
+        let qqResult = app.staticTexts["QQ 音乐"]
+        let kugouResult = app.staticTexts["酷狗音乐"]
+        XCTAssertTrue(qqResult.waitForExistence(timeout: 5))
+        XCTAssertTrue(kugouResult.waitForExistence(timeout: 5))
+        XCTAssertLessThan(qqResult.frame.minY, kugouResult.frame.minY)
+        app.buttons["完成"].click()
+
+        try openLyricSettings()
+        let moveQQUp = app.buttons["aggregate.moveUp.qq"]
+        let moveQQDown = app.buttons["aggregate.moveDown.qq"]
+        let moveKugouUp = app.buttons["aggregate.moveUp.kugou"]
+        XCTAssertFalse(moveQQUp.isEnabled)
+        moveKugouUp.click()
+        moveQQDown.click()
+        XCTAssertFalse(moveKugouUp.isEnabled)
+        XCTAssertTrue(moveQQUp.isEnabled)
+
+        app.terminate()
+        app.launch()
+        try openLyricSettings()
+        XCTAssertFalse(moveKugouUp.isEnabled)
+        try expectToggle("lookupSettings.source.kugou", enabled: true)
+        try closeLyricSettings()
+        try selectSong(0)
+        try searchAggregateFixture("Aggregate Priority")
+        XCTAssertTrue(kugouResult.waitForExistence(timeout: 5))
+        XCTAssertTrue(qqResult.waitForExistence(timeout: 5))
+        XCTAssertLessThan(kugouResult.frame.minY, qqResult.frame.minY)
+    }
+
+    func testAggregateBatchLookupUsesPriorityAndFallsBack() throws {
+        try launchWithLookupRequestRecording(aggregateBatch: true)
+        try importFolder()
+        try openLyricSettings()
+        let moveKugouUp = app.buttons["aggregate.moveUp.kugou"]
+        moveKugouUp.click()
+        moveKugouUp.click()
+        XCTAssertFalse(moveKugouUp.isEnabled)
+        try closeLyricSettings()
+        try selectSong(0)
+        XCUIElement.perform(withKeyModifiers: .command) { row(1).click() }
+        try expectLabel("library.selectionCount", "已选 2 首")
+        try fillBatchLyrics()
+        XCTAssertEqual(try requestedLookupSources(), ["kugou", "qq"])
+
+        app.toolbars.buttons.matching(identifier: "toolbar.saveAll").firstMatch.click()
+        try expectLabel("library.status", "已保存 2 首音乐")
+        XCTAssertEqual(try TagEngine.read(from: fixtures.songs[0]).album, "Kugou Album 1")
+        XCTAssertEqual(try TagEngine.read(from: fixtures.songs[1]).album, "QQ Fixture Album 2")
+        try verifyAudio()
+    }
+
+    private func launchWithLookupRequestRecording(aggregateBatch: Bool = false) throws {
         try FileManager.default.createDirectory(at: lookupRequests, withIntermediateDirectories: false)
         app.terminate()
         app.launchEnvironment["MUSICTAG_UI_TEST_LYRICS_FIXTURE"] = "1"
         app.launchEnvironment["MUSICTAG_UI_TEST_LOOKUP_REQUESTS"] = lookupRequests.path
+        if aggregateBatch {
+            app.launchEnvironment.removeValue(forKey: "MUSICTAG_UI_TEST_BATCH_LOOKUP_GATE")
+            app.launchEnvironment["MUSICTAG_UI_TEST_AGGREGATE_PRIORITY"] = "1"
+        }
         app.launch()
     }
 
@@ -414,12 +476,12 @@ final class MusicTagUITests: XCTestCase {
         Set(try FileManager.default.contentsOfDirectory(atPath: lookupRequests.path))
     }
 
-    private func searchAggregateFixture() throws {
+    private func searchAggregateFixture(_ query: String = "Aggregate Fixture") throws {
         app.toolbars.buttons.matching(NSPredicate(format: "label == %@", "搜索标签")).firstMatch.click()
         let picker = app.descendants(matching: .any).matching(identifier: "lookup.source").firstMatch
         XCTAssertTrue(picker.waitForExistence(timeout: 5))
         XCTAssertEqual(picker.value as? String, "聚合")
-        try replace(app.textFields["标题 / 艺术家 / 专辑"], with: "Aggregate Fixture", tabToCommit: false)
+        try replace(app.textFields["标题 / 艺术家 / 专辑"], with: query, tabToCommit: false)
         app.buttons["搜索"].click()
     }
 
@@ -472,7 +534,7 @@ final class MusicTagUITests: XCTestCase {
 
         XCUIElement.perform(withKeyModifiers: .command) { row(2).click() }
         try expectLabel("library.selectionCount", "已选 2 首")
-        try fillBatchLyrics()
+        try fillBatchLyrics(source: "QQ 音乐")
         try selectSong(0)
         try expectValue(findLyricsEditor(), qqBilingualLyrics)
         try selectSong(2)
@@ -484,7 +546,7 @@ final class MusicTagUITests: XCTestCase {
         try expectValue(findLyricsEditor(), localLyrics)
 
         XCUIElement.perform(withKeyModifiers: .command) { row(2).click() }
-        try fillBatchLyrics()
+        try fillBatchLyrics(source: "QQ 音乐")
         app.toolbars.buttons.matching(identifier: "toolbar.saveAll").firstMatch.click()
         try expectLabel("library.status", "已保存 2 首音乐")
         XCTAssertEqual(try TagEngine.read(from: fixtures.songs[0]).lyrics, qqBilingualLyrics)

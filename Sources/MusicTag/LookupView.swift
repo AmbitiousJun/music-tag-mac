@@ -51,7 +51,7 @@ struct LookupView: View {
                     Text("iTunes · 标签与封面").tag(Optional(LookupSource.itunes))
                     Text("LRCLIB · 歌词").tag(Optional(LookupSource.lrclib))
                 }.labelsHidden().frame(width: 290).accessibilityIdentifier("lookup.source")
-                if source == .itunes || (source == nil && store.aggregateSources.contains(.itunes)) { Picker("地区", selection: $country) { Text("中国").tag("CN"); Text("美国").tag("US"); Text("日本").tag("JP"); Text("英国").tag("GB") }.frame(width: 110).disabled(pending) }
+                if source == .itunes || (source == nil && store.orderedAggregateSources.contains(.itunes)) { Picker("地区", selection: $country) { Text("中国").tag("CN"); Text("美国").tag("US"); Text("日本").tag("JP"); Text("英国").tag("GB") }.frame(width: 110).disabled(pending) }
                 Spacer()
             }
             HStack {
@@ -202,7 +202,7 @@ struct LookupView: View {
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !pending else { return }
         let selectedSource = source, selectedCountry = country
-        let aggregateSources = store.aggregateSources
+        let aggregateSources = store.orderedAggregateSources
         results = []; lyrics = []; selectedLyric = nil
         run("正在搜索 \(selectedSource?.name ?? "聚合来源")…") { id in
             if selectedSource == .lrclib {
@@ -297,7 +297,7 @@ struct BatchLookupView: View {
     @EnvironmentObject private var store: LibraryStore
     @Environment(\.dismiss) private var dismiss
     let selection: BatchLookupSelection
-    @State private var source: LookupSource = .qq
+    @State private var source: LookupSource?
     @State private var task: Task<Void, Never>?
     @State private var completed = 0
     @State private var currentTitle = ""
@@ -312,9 +312,10 @@ struct BatchLookupView: View {
             Text("为所选 \(selection.tracks.count) 首歌曲分别匹配标签、封面和歌词。")
                 .foregroundStyle(.secondary)
             Picker("数据源", selection: $source) {
-                Text(LookupSource.qq.name).tag(LookupSource.qq)
-                Text(LookupSource.netease.name).tag(LookupSource.netease)
-                Text(LookupSource.kugou.name).tag(LookupSource.kugou)
+                Text("聚合").tag(nil as LookupSource?)
+                ForEach(LookupSource.allCases) { source in
+                    Text(source.name).tag(Optional(source))
+                }
             }
             .fixedSize()
             .disabled(running)
@@ -377,7 +378,7 @@ struct BatchLookupView: View {
         summary = nil
         issues = []
         currentTitle = selection.tracks.first?.title ?? ""
-        let lookupSource = source
+        let sources = source.map { [$0] } ?? store.orderedAggregateSources
         let options = store.lyricOptions
         store.busy = true
         task = Task { @MainActor in
@@ -387,11 +388,16 @@ struct BatchLookupView: View {
                 currentTitle = track.title
                 if track.writable {
                     do {
-                        let result = try await lookup(track, source: lookupSource, options: options)
+                        let result = try await lookup(track, sources: sources, options: options)
                         guard !Task.isCancelled else { return }
                         results[track.id] = result
-                        let missing = [result.artwork == nil ? "封面" : nil, result.lyrics == nil ? "歌词" : nil].compactMap { $0 }
-                        if !missing.isEmpty { issues.append(Issue(track, "未获取\(missing.joined(separator: "、"))")) }
+                        if let song = result.song {
+                            let missing = [
+                                result.artwork == nil ? "封面" : nil,
+                                song.source.hasSongLyrics && result.lyrics == nil ? "歌词" : nil
+                            ].compactMap { $0 }
+                            if !missing.isEmpty { issues.append(Issue(track, "未获取\(missing.joined(separator: "、"))")) }
+                        }
                     } catch {
                         guard !Task.isCancelled else { return }
                         issues.append(Issue(track, error.localizedDescription))
@@ -411,7 +417,7 @@ struct BatchLookupView: View {
         }
     }
 
-    private func lookup(_ track: TrackItem, source: LookupSource, options: LyricOptions) async throws -> BatchLookupResult {
+    private func lookup(_ track: TrackItem, sources: [LookupSource], options: LyricOptions) async throws -> BatchLookupResult {
         #if UI_TESTING
         if let gate = ProcessInfo.processInfo.environment["MUSICTAG_UI_TEST_BATCH_LOOKUP_GATE"] {
             // Keep the real sheet in its running state until the UI test releases the fixture.
@@ -422,7 +428,7 @@ struct BatchLookupView: View {
             throw AppError.message("没有可靠匹配")
         }
         #endif
-        return try await OnlineLookup.batchResult(for: track, source: source, options: options, session: lookupSession)
+        return try await OnlineLookup.batchResult(for: track, sources: sources, options: options, session: lookupSession)
     }
 
     private func cancel() {

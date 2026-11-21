@@ -78,6 +78,14 @@ struct TagField: Identifiable {
             defaults.set(aggregateSources.map(\.rawValue).sorted(), forKey: Self.aggregateSourcesKey)
         }
     }
+    @Published private(set) var aggregateSourceOrder: [LookupSource] {
+        didSet {
+            defaults.set(aggregateSourceOrder.map(\.rawValue), forKey: Self.aggregateSourceOrderKey)
+        }
+    }
+    var orderedAggregateSources: [LookupSource] {
+        aggregateSourceOrder.filter { aggregateSources.contains($0) }
+    }
     @Published var sortMode = 0
     private var player: AVAudioPlayer?
     private var undoHistory: [[UUID: AudioTags]] = []
@@ -86,6 +94,7 @@ struct TagField: Identifiable {
     private static let lastDirectoryPathsKey = "lastImportedDirectoryPaths"
     private static let lyricOptionsKey = "lyricOptions"
     private static let aggregateSourcesKey = "aggregateLookupSources"
+    private static let aggregateSourceOrderKey = "aggregateLookupSourceOrder"
     private let defaults: UserDefaults
     private var didAttemptDirectoryRestore = false
 
@@ -94,6 +103,10 @@ struct TagField: Identifiable {
         let savedSources = Set((defaults.stringArray(forKey: Self.aggregateSourcesKey) ?? [])
             .compactMap(LookupSource.init(rawValue:)))
         aggregateSources = savedSources.isEmpty ? [.qq, .netease, .kugou] : savedSources
+        let savedOrder = (defaults.stringArray(forKey: Self.aggregateSourceOrderKey) ?? [])
+            .compactMap(LookupSource.init(rawValue:))
+        var seenSources = Set<LookupSource>()
+        aggregateSourceOrder = (savedOrder + LookupSource.allCases).filter { seenSources.insert($0).inserted }
         var options = defaults.data(forKey: Self.lyricOptionsKey)
             .flatMap { try? JSONDecoder().decode(LyricOptions.self, from: $0) } ?? LyricOptions()
         if defaults.object(forKey: Self.lyricOptionsKey) == nil,
@@ -119,6 +132,13 @@ struct TagField: Identifiable {
         }
         guard !sources.isEmpty, sources != aggregateSources else { return }
         aggregateSources = sources
+    }
+
+    func moveAggregateSource(_ source: LookupSource, up: Bool) {
+        guard let index = aggregateSourceOrder.firstIndex(of: source) else { return }
+        let destination = index + (up ? -1 : 1)
+        guard aggregateSourceOrder.indices.contains(destination) else { return }
+        aggregateSourceOrder.swapAt(index, destination)
     }
 
     private static func isExistingDirectory(_ url: URL) -> Bool {

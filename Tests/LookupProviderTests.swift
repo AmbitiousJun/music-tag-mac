@@ -81,6 +81,7 @@ private final class StubProtocol: URLProtocol {
         catch let error as AppError { try expect(error.localizedDescription.contains("HTTPS"), "HTTPS restriction") }
         print("PASS request headers, Unicode/special-character escaping, detail POST and transport errors")
         try await testBatchLookup(session: session)
+        try await testAggregateBatchLookup(session: session)
         try await testKugouRequests(session: session)
         try await testAggregateLookup(session: session)
     }
@@ -176,13 +177,73 @@ private final class StubProtocol: URLProtocol {
             }
         }
         for query in ["周杰伦 晴天", "晴天 周杰伦", "周杰伦晴天"] {
-            let response = try await OnlineLookup.aggregate(query: query, sources: Set(LookupSource.allCases), session: session)
+            let response = try await OnlineLookup.aggregate(query: query, sources: LookupSource.allCases, session: session)
             try expect(response.results.map(\.id) == ["qq:1", "itunes:1", "lrclib:1", "qq:2"], "aggregate keyword ranking, stable order, qualified identity and duplicate handling")
             try expect(response.failedSources == [.netease], "failed sources distinguished from successful empty providers")
         }
+        let reordered = try await OnlineLookup.aggregate(query: "周杰伦 晴天", sources: [.lrclib, .itunes, .qq], session: session)
+        try expect(reordered.results.map(\.id) == ["lrclib:1", "itunes:1", "qq:1", "qq:2"], "configured priority breaks only relevance ties")
         let response = try await OnlineLookup.aggregate(query: "晴天", sources: [.lrclib], session: session)
         try expect(response.results.map(\.id) == ["lrclib:1"] && response.failedSources.isEmpty, "aggregate uses selected sources")
         print("PASS aggregate ranking, stable provider order, mixed results, selected sources and partial failure")
+    }
+
+    private static func testAggregateBatchLookup(session: URLSession) async throws {
+        let qqRows = [1, 2].map {
+            ["songid": $0, "songname": "Sample", "singer": [["name": "Artist"]], "interval": 180] as OnlineLookup.Object
+        }
+        let qq = try json(["code": 0, "data": ["song": ["list": qqRows]]])
+        let itunesRows: [OnlineLookup.Object] = [
+            ["trackId": 3, "trackName": "Sample", "artistName": "Artist", "collectionName": "iTunes album", "trackTimeMillis": 180000]
+        ]
+        let itunes = try json(["results": itunesRows])
+        let lrclibRows: [OnlineLookup.Object] = [
+            ["id": 4, "trackName": "Sample", "artistName": "Artist", "albumName": "LRCLIB album",
+             "duration": 180, "plainLyrics": "Matched lyrics"],
+            ["id": 5, "trackName": "Sample", "artistName": "Artist", "albumName": "LRCLIB album",
+             "duration": 200, "plainLyrics": "Lyrics for another recording"]
+        ]
+        let lrclib = try JSONSerialization.data(withJSONObject: lrclibRows)
+        let emptyLyricsRows: [OnlineLookup.Object] = [
+            ["id": 6, "trackName": "Sample", "artistName": "Artist", "duration": 180, "instrumental": true]
+        ]
+        let emptyLyrics = try JSONSerialization.data(withJSONObject: emptyLyricsRows)
+        var requested: [String] = []
+        var lrclibResponse = lrclib
+        StubProtocol.handler = { request in
+            let host = request.url?.host ?? ""
+            requested.append(host)
+            switch host {
+            case "c.y.qq.com": return (200, qq)
+            case "music.163.com": return (503, Data())
+            case "itunes.apple.com": return (200, itunes)
+            case "lrclib.net": return (200, lrclibResponse)
+            default: throw AppError.message("Unexpected batch endpoint")
+            }
+        }
+        let tags = AudioTags(title: "Sample", artist: "Artist", album: "Local album", lyrics: "Local lyrics", artwork: Data([1]))
+        let track = TrackItem(id: UUID(), url: URL(fileURLWithPath: "/tmp/Sample.wav"), tags: tags, savedTags: tags,
+                              duration: 180, size: 0, sampleRate: 0, channels: 0, issue: nil)
+
+        let catalog = try await OnlineLookup.batchResult(for: track, sources: [.netease, .qq, .itunes, .lrclib], session: session)
+        try expect(requested == ["music.163.com", "c.y.qq.com", "itunes.apple.com"], "batch falls back from a failed and ambiguous source in order, then stops")
+        try expect(catalog.song?.collectionName == "iTunes album" && catalog.lyrics == nil, "the first reliable catalog source wins even without lyrics")
+
+        requested = []
+        let lyrics = try await OnlineLookup.batchResult(for: track, sources: [.lrclib, .itunes], session: session)
+        var applied = tags
+        lyrics.applying(to: &applied)
+        var expected = tags
+        expected.lyrics = "Matched lyrics"
+        try expect(requested == ["lrclib.net"] && applied == expected, "LRCLIB matches the recording and changes lyrics only")
+
+        requested = []
+        lrclibResponse = emptyLyrics
+        let fallback = try await OnlineLookup.batchResult(for: track, sources: [.lrclib, .itunes], session: session)
+        try expect(requested == ["lrclib.net", "itunes.apple.com"] && fallback.song?.source == .itunes,
+                   "LRCLIB without usable lyrics falls through to the next source")
+
+        print("PASS aggregate batch priority, provider failure, ambiguous recordings, iTunes support and LRCLIB lyrics-only application")
     }
 
     private static func testKugouLyrics() throws {
@@ -360,22 +421,23 @@ private final class StubProtocol: URLProtocol {
         var plainOptions = LyricOptions()
         plainOptions.removeTimes = true
         let formatted = try await OnlineLookup.batchResult(for: first, source: .qq, options: plainOptions, session: session)
-        let previewed = try await OnlineLookup.lyrics(for: firstResult.song, options: plainOptions, session: session)
+        guard let firstSong = firstResult.song else { throw AppError.message("Missing QQ catalog match") }
+        let previewed = try await OnlineLookup.lyrics(for: firstSong, options: plainOptions, session: session)
         try expect(formatted.lyrics == "First song 第一首歌" && formatted.lyrics == previewed, "Batch and individual lookup return QQ translations using the same format settings")
-        try expect(firstResult.song.trackId == 3 && firstResult.artwork == cover && firstResult.lyrics == lyric + " 第一首歌", "Use filename, duration and album to choose the correct recording")
+        try expect(firstSong.trackId == 3 && firstResult.artwork == cover && firstResult.lyrics == lyric + " 第一首歌", "Use filename, duration and album to choose the correct recording")
         plainOptions.translationEnabled = false
-        let original = try await OnlineLookup.lyrics(for: firstResult.song, options: plainOptions, session: session)
+        let original = try await OnlineLookup.lyrics(for: firstSong, options: plainOptions, session: session)
         try expect(original == "First song", "QQ returns the original when translations are off")
         let legacyTranslation = try await OnlineLookup.lyrics(for: CatalogSong(source: .qq, trackId: 12, songMid: "12"), session: session)
         try expect(legacyTranslation == lyric + " 第一首歌", "Prefer the legacy endpoint when only it has usable translated lines")
         let modernOriginal = try await OnlineLookup.lyrics(for: CatalogSong(source: .qq, trackId: 13, songMid: "13"), session: session)
         try expect(modernOriginal == lyric, "Preserve the modern original if the legacy endpoint fails")
-        try expect(secondResult.song.trackId == 5 && secondResult.artwork == nil && secondResult.lyrics == nil, "Keep the tag match when the image or lyrics fail")
+        try expect(secondResult.song?.trackId == 5 && secondResult.artwork == nil && secondResult.lyrics == nil, "Keep the tag match when the image or lyrics fail")
 
         let liveTags = AudioTags(title: "我的骄傲", artist: "糖妹;安崎;炎明熹", album: "声生不息 第10期")
         let live = track("我的骄傲.flac", tags: liveTags, duration: 240.026667)
         let liveResult = try await OnlineLookup.batchResult(for: live, source: .qq, session: session)
-        try expect(liveResult.song.trackId == 6 && liveResult.song.trackName == "我的骄傲 (Live)", "Use the confirmed live recording and retain the provider title")
+        try expect(liveResult.song?.trackId == 6 && liveResult.song?.trackName == "我的骄傲 (Live)", "Use the confirmed live recording and retain the provider title")
         try expect(liveResult.lyrics == lyric, "Reject modern lyrics for a different song and use the legacy QQ endpoint")
         var missingAlbum = live
         missingAlbum.tags.album = ""
