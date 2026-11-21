@@ -163,6 +163,43 @@ private final class StubProtocol: URLProtocol {
                                                  includeTranslation: true, session: session)
         try expect(lyric?.original == original && lyric?.translation == nil, "Kugou preserves LRC when bilingual KRC is unavailable")
         print("PASS Kugou grouped catalogue ambiguity and original-only LRC fallback")
+
+        func liveLyrics(candidateTitle: String, candidateArtist: String = "Artist A、Artist B",
+                        candidateDuration: Int? = 180_065, hash: String? = "test-hash",
+                        duration: Int? = 180, exactTitle: Bool = false) async throws -> String? {
+            StubProtocol.handler = { request in
+                guard let url = request.url else { throw URLError(.badURL) }
+                let params = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+                if url.path == "/search" {
+                    try expect(params.first { $0.name == "hash" }?.value == hash, "Lyric search passes the recording hash")
+                    var candidate: [String: Any] = ["id": "base", "accesskey": "test", "song": candidateTitle, "singer": candidateArtist]
+                    candidate["duration"] = candidateDuration
+                    let exact: [String: Any] = ["id": "exact", "accesskey": "test", "song": "Sample (Live)",
+                                                 "singer": "Artist A、Artist B", "duration": 180_065]
+                    return (200, try json(["status": 200, "candidates": exactTitle ? [candidate, exact] : [candidate]]))
+                }
+                let exact = params.contains(URLQueryItem(name: "id", value: "exact"))
+                let content = Data("[00:01.00]\(exact ? "Exact" : "Base")".utf8).base64EncodedString()
+                return (200, try json(["status": 200, "content": content]))
+            }
+            return try await KugouLyrics.fetch(title: "Sample （Live）", artist: "Artist A/Artist B", hash: hash,
+                                               duration: duration, includeTranslation: false, session: session)?.original
+        }
+
+        let base = try await liveLyrics(candidateTitle: "Sample")
+        let exact = try await liveLyrics(candidateTitle: "Sample", exactTitle: true)
+        try expect(base == "[00:01.00]Base", "Hash-scoped live recordings accept the base lyric title")
+        try expect(exact == "[00:01.00]Exact", "Prefer the exact lyric title when both titles are present")
+        let rejected = [
+            try await liveLyrics(candidateTitle: "Sample (Remix)"),
+            try await liveLyrics(candidateTitle: "Sample", candidateArtist: "Artist B"),
+            try await liveLyrics(candidateTitle: "Sample", candidateDuration: 184_001),
+            try await liveLyrics(candidateTitle: "Sample", candidateDuration: nil),
+            try await liveLyrics(candidateTitle: "Sample", hash: nil),
+            try await liveLyrics(candidateTitle: "Sample", duration: nil)
+        ]
+        try expect(rejected.allSatisfy { $0 == nil }, "Live-title fallback requires the recording hash, artist, duration and base title")
+        print("PASS Kugou live-title lyric matching and exact title precedence")
     }
 
     @MainActor private static func testBatchLookup(session: URLSession) async throws {

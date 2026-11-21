@@ -132,7 +132,18 @@ struct LookupView: View {
             VStack(alignment: .leading, spacing: 14) {
                 Text(item.title).font(.headline)
                 ScrollView { Text(item.text).accessibilityIdentifier("lookup.lyricPreview").font(.system(size: 12, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(12) }
-                HStack { Text("应用后仍需保存写入音乐文件").font(.caption).foregroundStyle(.secondary); Spacer(); Button("取消") { preview = nil }.keyboardShortcut(.cancelAction); Button("应用歌词") { applyLyrics(item.text); preview = nil }.buttonStyle(.borderedProminent) }
+                HStack {
+                    Text("应用后仍需保存写入音乐文件").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("取消") {
+                        preview = nil
+                        message = "已取消歌词预览"
+                    }.keyboardShortcut(.cancelAction)
+                    Button("应用歌词") {
+                        applyLyrics(item.text)
+                        preview = nil
+                    }.buttonStyle(.borderedProminent)
+                }
             }.padding(24).frame(width: 620, height: 500)
         }
     }

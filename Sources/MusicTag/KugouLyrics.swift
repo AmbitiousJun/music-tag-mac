@@ -27,12 +27,28 @@ enum KugouLyrics {
             throw AppError.message("酷狗音乐歌词搜索暂时不可用")
         }
 
-        let candidates = rows.filter { row in
-            guard let song = OnlineLookup.string(row["song"]), matchKey(song) == titleKey,
-                  let singer = OnlineLookup.string(row["singer"]), matchKey(singer) == artistKey else { return false }
-            guard let durationMS, let candidateMS = OnlineLookup.integer(row["duration"]), candidateMS > 0 else { return true }
-            return (durationMS - 4_000...durationMS + 4_000).contains(candidateMS)
+        let liveBaseKey = OnlineLookup.liveBaseTitle(
+            title.trimmingCharacters(in: .whitespacesAndNewlines)
+                .folding(options: [.caseInsensitive, .widthInsensitive], locale: nil)
+        ).map(matchKey)
+        var exactCandidates: [OnlineLookup.Object] = []
+        var liveCandidates: [OnlineLookup.Object] = []
+        for row in rows {
+            guard let song = OnlineLookup.string(row["song"]),
+                  let singer = OnlineLookup.string(row["singer"]), matchKey(singer) == artistKey else { continue }
+            let candidateKey = matchKey(song)
+            let candidateMS = OnlineLookup.integer(row["duration"]).flatMap { $0 > 0 ? $0 : nil }
+            if let durationMS, let candidateMS, !(durationMS - 4_000...durationMS + 4_000).contains(candidateMS) {
+                continue
+            }
+            if candidateKey == titleKey {
+                exactCandidates.append(row)
+            } else if candidateKey == liveBaseKey, query["hash"] != nil, durationMS != nil, candidateMS != nil {
+                // A hash-scoped result can omit the catalogue's live suffix.
+                liveCandidates.append(row)
+            }
         }
+        let candidates = exactCandidates.isEmpty ? liveCandidates : exactCandidates
 
         var fallback: Lyrics?
         var lastError: Error?
