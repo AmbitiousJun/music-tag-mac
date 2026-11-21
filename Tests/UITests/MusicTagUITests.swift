@@ -496,6 +496,7 @@ final class MusicTagUITests: XCTestCase {
         preview.click()
         try expectLabel("lookup.lyricPreview", qqBilingualLyrics)
         app.typeKey(.escape, modifierFlags: [])
+        try expectLabel("lookup.status", "已取消歌词预览")
         app.buttons["lookup.applyAll"].click()
         try expectLabel("lookup.status", "已更新 1 首音乐，关闭窗口后保存以写入文件")
         app.buttons["完成"].click()

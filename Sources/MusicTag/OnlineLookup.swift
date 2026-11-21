@@ -272,7 +272,7 @@ enum OnlineLookup {
             .split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 
-    private static func liveBaseTitle(_ title: String) -> String? {
+    static func liveBaseTitle(_ title: String) -> String? {
         guard let suffix = ["(live)", "(现场)", "(现场版)", "(現場)", "(現場版)"].first(where: { title.hasSuffix($0) }) else { return nil }
         let base = title.dropLast(suffix.count).trimmingCharacters(in: .whitespaces)
         return base.isEmpty ? nil : base
