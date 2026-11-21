@@ -1,4 +1,4 @@
-name: Validate real macOS UI
+name: Validate macOS release
 
 on:
   workflow_dispatch:
@@ -7,11 +7,59 @@ permissions:
   contents: read
 
 jobs:
-  ui:
+  offline:
+    name: Offline tags, lookup and icon
     runs-on: macos-15
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      - name: Install audio fixture tools
+        run: |
+          if ! command -v ffmpeg || ! command -v ffprobe; then
+            brew install ffmpeg
+          fi
+      - name: Verify local tags and audio integrity
+        run: bash scripts/test.sh
+      - name: Verify provider fixtures and lyric formatting
+        run: bash scripts/test-lookup.sh
+      - name: Check every ICNS representation against its source artwork
+        run: bash scripts/test-icon.sh
+      - name: Retain offline test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: musictag-offline-results
+          path: analysis/tests/*-results.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+  online:
+    name: Live provider integration
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify all live providers
+        run: bash scripts/test-online.sh
+      - name: Retain live provider test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: musictag-online-results
+          path: analysis/tests/online-results.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+  ui:
+    name: Native selection and real App XCUITest
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check and select ABC keyboard input
+        run: xcrun swift scripts/select-abc-input.swift
+      - name: Check native music selection and focus
+        run: bash scripts/test-selection.sh
       - name: Run XCUITest against the real app
         run: bash scripts/test-ui.sh
       - name: Retain screenshots, accessibility trees and test results

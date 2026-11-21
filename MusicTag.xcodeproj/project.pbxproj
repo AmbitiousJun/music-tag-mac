@@ -293,8 +293,8 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "MusicTag UI Test";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
 				INFOPLIST_KEY_NSHighResolutionCapable = "YES";
-				MARKETING_VERSION = "1.1.0";
-				CURRENT_PROJECT_VERSION = "2";
+				MARKETING_VERSION = "1.2.0";
+				CURRENT_PROJECT_VERSION = "3";
 				COMBINE_HIDPI_IMAGES = "YES";
 				ENABLE_APP_SANDBOX = "NO";
 			};
@@ -310,8 +310,8 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "MusicTag UI Test";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
 				INFOPLIST_KEY_NSHighResolutionCapable = "YES";
-				MARKETING_VERSION = "1.1.0";
-				CURRENT_PROJECT_VERSION = "2";
+				MARKETING_VERSION = "1.2.0";
+				CURRENT_PROJECT_VERSION = "3";
 				COMBINE_HIDPI_IMAGES = "YES";
 				ENABLE_APP_SANDBOX = "NO";
 			};
